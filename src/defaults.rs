@@ -10,22 +10,38 @@ pub fn default_constants() -> HashMap<String, Object> {
     ])
 }
 
+/// Takes a function name `name`, e.g. `exp`, and returns the tuple consisting of
+/// 1. Stringified name of the function
+/// 2. `FunctionRepr::Direct`: expect exactly one `f64` as argument; if so, return `Ok(x.name())`, otherwise, the appropriate `Err`.
+macro_rules! float_1_function {
+    ($name:ident) => {
+        (
+            stringify!($name).to_string(),
+            FunctionRepr::Direct(Box::new(|args| {
+                if args.len() != 1 {
+                    Err(format!(
+                        "Wrong number of arguments provided for function '{}' (expected 1, got {}).",
+                        stringify!($name),
+                        args.len()
+                    ))
+                } else {
+                    match args[0] {
+                        Object::Float(x) => Ok(Object::Float(x.$name())),
+                        _ => Err(format!(
+                            "Wrong type of argument provided for function '{}' (expected float).",
+                            stringify!($name)
+                        )),
+                    }
+                }
+            })),
+        )
+    };
+}
+
 pub fn default_functions() -> HashMap<String, FunctionRepr> {
     HashMap::<String, FunctionRepr>::from([
-        ("exp".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'exp' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.exp())),
-                _ => Err("Wrong type of argument provided for function 'exp' (expected float).".to_string())
-            } }
-        }))),
-        ("ln".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'ln' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.ln())),
-                _ => Err("Wrong type of argument provided for function 'ln' (expected float).".to_string())
-            } }
-        }))),
+        float_1_function!(exp),
+        float_1_function!(ln),
         ("log".to_string(), FunctionRepr::Direct(Box::new(|args| {
             if args.len() != 2 { Err(format!("Wrong number of arguments provided for function 'log' (expected 2 [value, base], got {}).", args.len())) }
             else {
@@ -38,99 +54,9 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
                 else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
             }
         }))),
-        ("sqrt".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'sqrt' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.sqrt())),
-                _ => Err("Wrong type of argument provided for function 'sqrt' (expected float).".to_string())
-            } }
-        }))),
-
-
-        // ---------------------------------------------- TRIGONOMETRIC FUNCTIONS ----------------------------------------------
-        ("cos".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'cos' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.cos())),
-                _ => Err("Wrong type of argument provided for function 'cos' (expected float).".to_string())
-            } }
-        }))),
-        ("cosh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'cosh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.cosh())),
-                _ => Err("Wrong type of argument provided for function 'cosh' (expected float).".to_string())
-            } }
-        }))),
-        ("sin".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'sin' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.sin())),
-                _ => Err("Wrong type of argument provided for function 'sin' (expected float).".to_string())
-            } }
-        }))),
-        ("sinh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'sinh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.sinh())),
-                _ => Err("Wrong type of argument provided for function 'sinh' (expected float).".to_string())
-            } }
-        }))),
-        ("tan".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'tan' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.tan())),
-                _ => Err("Wrong type of argument provided for function 'tan' (expected float).".to_string())
-            } }
-        }))),
-        ("tanh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'tanh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.tanh())),
-                _ => Err("Wrong type of argument provided for function 'tanh' (expected float).".to_string())
-            } }
-        }))),
-        ("acos".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'acos' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.acos())),
-                _ => Err("Wrong type of argument provided for function 'acos' (expected float).".to_string())
-            } }
-        }))),
-        ("acosh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'acosh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.acosh())),
-                _ => Err("Wrong type of argument provided for function 'acosh' (expected float).".to_string())
-            } }
-        }))),
-        ("asin".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'asin' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.asin())),
-                _ => Err("Wrong type of argument provided for function 'asin' (expected float).".to_string())
-            } }
-        }))),
-        ("asinh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'asinh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.asinh())),
-                _ => Err("Wrong type of argument provided for function 'asinh' (expected float).".to_string())
-            } }
-        }))),
-        ("atan".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'atan' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.atan())),
-                _ => Err("Wrong type of argument provided for function 'atan' (expected float).".to_string())
-            } }
-        }))),
-        ("atanh".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 1 { Err(format!("Wrong number of arguments provided for function 'atanh' (expected 1, got {}).", args.len())) }
-            else { match args[0] {
-                Object::Float(x) => Ok(Object::Float(x.atanh())),
-                _ => Err("Wrong type of argument provided for function 'atanh' (expected float).".to_string())
-            } }
-        }))),
+        float_1_function!(sqrt),
+        float_1_function!(cos), float_1_function!(cosh), float_1_function!(acos), float_1_function!(acosh),
+        float_1_function!(sin), float_1_function!(sinh), float_1_function!(asin), float_1_function!(asinh),
+        float_1_function!(tan), float_1_function!(tanh), float_1_function!(atan), float_1_function!(atanh),
     ])
 }

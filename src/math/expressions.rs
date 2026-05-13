@@ -22,7 +22,7 @@ pub enum Expression {
     /// Compute the directional derivative of `SecondArg` at point `ThirdArg` in direction `FourthArg` where the variables w.r.t. which we differentiate are `first_args`.
     DirectionalDerivative(Vec<String>, Box<Expression>, Vec<Expression>, Vec<Expression>),
     /// `if (FirstArg) { SecondArg } else { ThirdArg }`
-    IfElse(Box<Expression>, Box<Expression>, Box<Expression>),
+    IfElse(Box<Expression>, Box<Expression>, Box<Expression>)
 }
 
 impl fmt::Display for Expression {
@@ -36,6 +36,7 @@ impl fmt::Display for Expression {
             Expression::UnaryOperation(op, r) => {
                 match op {
                     UnaryOperation::Neg => write!(f, "(-({}))", r),
+                    UnaryOperation::Factorial => write!(f, "(!({}))", r),
                     UnaryOperation::Abs => write!(f, "|{}|", r),
                 }
             },
@@ -79,6 +80,7 @@ impl Expression {
             Expression::UnaryOperation(op, r) => {
                 match op {
                     UnaryOperation::Neg => vec![format!("(-({}))", r)],
+                    UnaryOperation::Factorial => vec![format!("(!({}))", r)],
                     UnaryOperation::Abs => vec![format!("|{}|", r)],
                 }
             },
@@ -183,4 +185,66 @@ impl Expression {
             _ => {}
         }
     }
+}
+
+// The following macros simplify typing a LOT.
+#[macro_export]
+macro_rules! expr_if_else {
+    ($condition:expr, $iftrue:expr, $iffalse:expr) => {
+        Expression::IfElse(
+            Box::new($condition),
+            Box::new($iftrue),
+            Box::new($iffalse)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_compare {
+    ($lhs:expr, $comparison_operator:ident, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Comp(Comparison::$comparison_operator, None),
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_add {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Add,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_sub {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Sub,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_mul {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Mul,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_div {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Div,
+            Box::new($rhs)
+        )
+    };
 }

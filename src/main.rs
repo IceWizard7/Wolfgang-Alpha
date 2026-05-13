@@ -53,9 +53,6 @@ fn scroll_to_bottom(id: &str) {
         let height = element.scroll_height();
         element.set_scroll_top(height);
     }
-    // Below code would create a smooth scroll effect, but in our case, we do not want this (it looks bad).
-    // let code = format!("const el = document.getElementById(\"{}\"); if (el) {{ el.scrollTo({{ top: el.scrollHeight, behavior: \"smooth\" }}); }}", id);
-    // document::eval(&code);
 }
 
 /// Given the user input as parameter, returns the new lines to be added to the console.

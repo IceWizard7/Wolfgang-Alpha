@@ -64,5 +64,6 @@ impl fmt::Debug for BinaryOperation {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UnaryOperation {
     Neg,
+    Factorial,
     Abs,
 }

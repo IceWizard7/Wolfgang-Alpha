@@ -34,6 +34,8 @@ pub enum BinaryOperation {
     Quo,
     Rem,
     Pow,
+    And,
+    Or,
     Comp(Comparison, Option<Box<Expression>>)
 }
 impl BinaryOperation {
@@ -46,6 +48,8 @@ impl BinaryOperation {
             BinaryOperation::Quo => "//",
             BinaryOperation::Rem => "%",
             BinaryOperation::Pow => "^",
+            BinaryOperation::And => "&&",
+            BinaryOperation::Or => "||",
             BinaryOperation::Comp(c, _) => c.as_str(),
         }
     }
@@ -64,6 +68,7 @@ impl fmt::Debug for BinaryOperation {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UnaryOperation {
     Neg,
+    Not,
     Factorial,
     Abs,
 }

@@ -25,11 +25,14 @@
 //!     - `D f(4)[2]`: free variables are set to be the argnames of `f` (these will be the keys of the hashmap, cf. implementation).
 //!     - `D <expr> (expr_1, ..., expr_n)[expr'_1, ..., expr'_m]`: collect all unknown identifiers within `expr` into a vector in ascending alphabetic order `x_1, ..., x_l`.
 //!       If `l=m=n`, infer that these should be the keys of the hashmaps (cf. implementation). Otherwise, return `Err`.
+//! - Notice that the token `!` acts as both the `not` operator and the factorial operator. In context, one can always differentiate between the two, with one minor downside:
+//!   the syntax `x * (!y)` cannot be shortened to `x !y` (since these spaces disappear while tokenizing, one would not be able to differentiate this with `(x!) * y`).
 
 use std::iter::Peekable;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::Chars;
+use dioxus_logger::tracing;
 use rand::Rng;
 
 use crate::math;
@@ -37,6 +40,27 @@ use crate::math::{Comparison, BinaryOperation, UnaryOperation, Object, Expressio
 
 
 const DEFAULT_TESTEQ_REPETITIONS: i64 = 100;
+
+
+#[derive(Debug)]
+pub enum VarStack<'a> {
+    Empty,
+    Frame {
+        vars: &'a HashMap<&'a String, &'a Object>,
+        parent: &'a VarStack<'a>,
+    },
+}
+
+impl<'a> VarStack<'a> {
+    pub fn lookup(&self, key: &String) -> Option<&Object> {
+        match self {
+            VarStack::Empty => None,
+            VarStack::Frame { vars, parent } => {
+                vars.get(key).copied().or_else(|| parent.lookup(key))
+            }
+        }
+    }
+}
 
 
 /// The tokens appearing in the grammar used by the calculator.
@@ -79,6 +103,14 @@ pub enum Token {
     If,
     /// The keyword "else"
     Else,
+    /// &
+    Ampersand,
+    /// &&
+    DoubleAmpersand,
+    /// ||
+    DoublePipe,
+    /// !
+    ExclamationMark,
     EOF,
 }
 
@@ -182,8 +214,24 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> V
             '}' => { chars.next(); tokens.push(Token::RBrace); }
             ',' => { chars.next(); tokens.push(Token::Comma); }
             ';' => { chars.next(); tokens.push(Token::Semicolon); }
+            '!' => { chars.next(); tokens.push(Token::ExclamationMark); }
             '\\' => { chars.next(); tokens.push(Token::Backslash); }
-            '|' => { chars.next(); tokens.push(Token::Pipe); }
+            '&' => {
+                chars.next();
+                match chars.peek() {
+                    Some('&') => {chars.next(); tokens.push(Token::DoubleAmpersand);}
+                    Some(_) => {tokens.push(Token::Ampersand);}
+                    _ => {}
+                }
+            }
+            '|' => {
+                chars.next();
+                match chars.peek() {
+                    Some('|') => {chars.next(); tokens.push(Token::DoublePipe);}
+                    Some(_) => {tokens.push(Token::Pipe);}
+                    _ => {}
+                }
+            }
             c if c.is_alphanumeric() || c == '_' => {
                 // Encountered first character of a "word" (potential identifier, but maybe of the form "2x").
                 // First, parse all leading digits (which may include a point), then the rest of the word.
@@ -228,20 +276,6 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> V
     tokens.push(Token::EOF);
     tokens
 }
-
-// Method discarded since 
-// /// Examples: `"D_var" -> ["var"]`, `"D_{var}" -> ["var"]`, `"D_{x, y}" -> ["x", "y"]`
-// fn parse_total_derivative_vars(input: &String) -> Option<Vec<String>> {
-//     Regex::new(r"^D_\{?([^}]+)\}?$").unwrap()
-//         .captures(input)
-//         .and_then(|caps| caps.get(1))
-//         .map(|m| {
-//             m.as_str()
-//                 .split(',')
-//                 .map(|x| str::trim(x).to_string())
-//                 .collect()
-//         })
-// }
 
 fn get_unknown_identifiers(expr: &Expression, identifiers: &mut HashSet<String>, constants: &HashMap<String, Object>) {
     match expr {
@@ -314,7 +348,9 @@ impl Parser {
         // First, determine the LHS of the next operation to execute.
         // This is either an identifier, a number or a further expression between parentheses.
         let mut lhs = match self.next() {
-            Token::Minus => Expression::UnaryOperation(UnaryOperation::Neg, Box::new(self.parse_expression(2, constants, functions))),
+            Token::Minus => Expression::UnaryOperation(UnaryOperation::Neg, Box::new(self.parse_expression(5, constants, functions))),
+            Token::ExclamationMark // An exclamation mark before an expected expression signifies a `not` operator
+                => Expression::UnaryOperation(UnaryOperation::Not, Box::new(self.parse_expression(3, constants, functions))),
             Token::Identifier(id) if id == "D" || id == "D_" => { // Total derivative
                 // Expected tokens: ("D" | "D_{...}") <FunctionExpr> (<point>) [<direction>].
                 // For a list of all accepted syntaxes, see the documentation of the program's syntax.
@@ -338,7 +374,7 @@ impl Parser {
                         other => panic!("Expected '{{' or identifier after `D_`, got {:?}", other)
                     }
                 }
-                let mut function_expr = self.parse_expression(5, constants, functions);
+                let mut function_expr = self.parse_expression(8, constants, functions);
                 // At this point, the next token can either be a parenthesis or a bracket.
                 let point = match (self.peek(), &mut function_expr) {
                     // This case means the point is yet to parse.
@@ -456,33 +492,42 @@ impl Parser {
         // Then, parse the RHS recursively.
         loop {
             let (op, prec, consume) = match self.peek() {
-                Token::Plus => (BinaryOperation::Add, 2, true),
-                Token::Minus => (BinaryOperation::Sub, 2, true),
-                Token::Asterisk => (BinaryOperation::Mul, 3, true),
-                Token::LParenthesis => (BinaryOperation::Mul, 3, false), // Expressions such as "2(x+1)" are parsed as "2*(x+1)".
-                Token::LBracket => (BinaryOperation::Mul, 3, false), // Same if a vector/matrix follows.
-                Token::Identifier(_) => (BinaryOperation::Mul, 3, false), // Expressions such as "(x+1)y" are parsed as "(x+1)*y".
-                Token::Slash => (BinaryOperation::Div, 3, true),
-                Token::DoubleSlash => (BinaryOperation::Quo, 3, true),
-                Token::Percent => (BinaryOperation::Rem, 3, true),
-                Token::Circumflex => (BinaryOperation::Pow, 4, true),
-                Token::Assign => (BinaryOperation::Add, 1, true), // We don't need any operation here, so 'Add' is just a placeholder to simplify notation
+                Token::Plus => (BinaryOperation::Add, 5, true),
+                Token::Minus => (BinaryOperation::Sub, 5, true),
+                Token::Asterisk => (BinaryOperation::Mul, 6, true),
+                Token::LParenthesis => (BinaryOperation::Mul, 6, false), // Expressions such as "2(x+1)" are parsed as "2*(x+1)".
+                Token::LBracket => (BinaryOperation::Mul, 6, false), // Same if a vector/matrix follows.
+                Token::Identifier(_) => (BinaryOperation::Mul, 6, false), // Expressions such as "(x+1)y" are parsed as "(x+1)*y".
+                Token::Slash => (BinaryOperation::Div, 6, true),
+                Token::DoubleSlash => (BinaryOperation::Quo, 6, true),
+                Token::Percent => (BinaryOperation::Rem, 6, true),
+                Token::Circumflex => (BinaryOperation::Pow, 7, true),
+                Token::Assign => (BinaryOperation::Add, 0, true), // We don't need any operation here, so 'Add' is just a placeholder to simplify notation
                 Token::Comparison(..) => {
                     // Slightly longer code here because we have to consume the token right now in order to avoid copying
                     if let Token::Comparison(c, param) = self.next() { // Will always succeed
                         (BinaryOperation::Comp(
                             c,
                             param.map(|p| Box::new(Parser{tokens: p, pos: 0}.parse(constants, functions)))
-                        ), 0, false) // `false` since the token was already consumed
+                        ), 4, false) // `false` since the token was already consumed
                     }
                     else { // Will never happen anyway
                         (BinaryOperation::Add, 0, false)
                     }
                 },
+                Token::DoublePipe => (BinaryOperation::Or, 1, true),
+                Token::DoubleAmpersand => (BinaryOperation::And, 2, true),
+
+                Token::ExclamationMark => { // An exclamation mark after an expression signifies a factorial operation
+                    lhs = Expression::UnaryOperation(UnaryOperation::Factorial, Box::new(lhs));
+                    continue;
+                }
+
                 // I wrote the following cases down explicitely so adding new tokens requires reviewing this code.
                 // Note that in this context, Token::Pipe is the closing pipe, since the opening one would have been consumed in the definition of `lhs`.
                 // Note also that the opening brace is tied to specific syntaxes (e.g. `if else` blocks) and thus cannot be found "freely".
-                Token::Number(_) | Token::Comma | Token::Semicolon | Token::Backslash | Token::LBrace | Token::If | Token::Else | Token::EOF
+                Token::Number(_) | Token::Comma | Token::Semicolon | Token::Backslash | Token::LBrace | Token::Ampersand
+                | Token::If | Token::Else | Token::EOF
                 | Token::RParenthesis | Token::RBracket | Token::RBrace | Token::Pipe
                     => { break; }
             };
@@ -495,7 +540,7 @@ impl Parser {
             // The RHS can only contain operators of strictly larger precedence, so we parse it with parameter 'prec+1'.
             let rhs = self.parse_expression(prec + 1, constants, functions);
 
-            lhs = if prec == 1 { // Assignment operator
+            lhs = if prec == 0 { // Assignment operator
                 Expression::Assignment(Box::new(lhs), Box::new(rhs))
             }
             else {
@@ -508,7 +553,7 @@ impl Parser {
                         Expression::Identifier(ident)
                     ) if lhs_ident == "d" && ident.len() > 1 => {
                         // Parse the function to differentiate recursively.
-                        Expression::PartialDerivative(ident[1..].to_string(), Box::new(self.parse_expression(5, constants, functions)))
+                        Expression::PartialDerivative(ident[1..].to_string(), Box::new(self.parse_expression(8, constants, functions)))
                     }
                     _ => Expression::BinaryOperation(Box::new(lhs), op, Box::new(rhs))
                 }
@@ -523,14 +568,19 @@ impl Parser {
     /// Note that we need knowledge of the environment here, since e.g. "x(y+1)" can be interpreted either as function call or as multiplication;
     /// knowledge of the environment resolves such ambiguities.
     /// 
+    /// Note that in the following table, there may be gaps between numbers, which allow to insert to operators more easily.
+    /// 
     /// <table>
     /// <tr> <th>Operators<th/> <th>Precedence<th/> </tr>
-    /// <trd> <td><, >, <=, >=, ==<td/> <td>0<td/> </tr>
-    /// <trd> <td>:=<td/> <td>1<td/> </tr>
-    /// <tr> <td>+, -<td/> <td>2<td/> </tr>
-    /// <tr> <td>*, /, //, %<td/> <td>3<td/> </tr>
-    /// <tr> <td>^<td/> <td>4<td/> </tr>
-    /// <tr> <td>d/dx, D<td/> <td>5<td/> </tr>
+    /// <trd> <td>:=<td/> <td>0<td/> </tr>
+    /// <trd> <td>||<td/> <td>1<td/> </tr>
+    /// <trd> <td>&&<td/> <td>2<td/> </tr>
+    /// <trd> <td>! (not)<td/> <td>3<td/> </tr>
+    /// <trd> <td><, >, <=, >=, ==<td/> <td>4<td/> </tr>
+    /// <tr> <td>+, -<td/> <td>5<td/> </tr>
+    /// <tr> <td>*, /, //, %<td/> <td>6<td/> </tr>
+    /// <tr> <td>^<td/> <td>7<td/> </tr>
+    /// <tr> <td>d/dx, D<td/> <td>8<td/> </tr>
     /// </table>
     pub fn parse(&mut self, constants: &mut HashMap<String, Object>, functions: &mut HashMap<String, FunctionRepr>) -> Expression {
         let expr = self.parse_expression(0, constants, functions);
@@ -631,7 +681,7 @@ pub fn parse_function_definition(
 /// Returns whether or not anything was modified. The parameter `modified_anything` should be set to `false` for the first call and will then be passed down recursively.
 fn prefix_unknown_identifiers(
     expr: &mut Expression,
-    extra_vars: &HashMap<&String, &Object>,
+    extra_vars: &VarStack,
     constants: &HashMap<String, Object>,
     modified_identifiers: &mut HashSet<String>,
     modified_anything: bool
@@ -639,8 +689,9 @@ fn prefix_unknown_identifiers(
     match expr {
         Expression::None | Expression::Number(_) | Expression::Vector(_) | Expression::Matrix(..) => modified_anything,
         Expression::Identifier(x) => {
-            if !constants.contains_key(x) && !extra_vars.contains_key(x) {
-                modified_identifiers.insert(format!("___tmp_{}", x));
+            if !constants.contains_key(x) && extra_vars.lookup(x).is_none() {
+                //modified_identifiers.insert(format!("___tmp_{}", x));
+                modified_identifiers.insert(x.clone());
                 true
             }
             else { modified_anything }
@@ -652,14 +703,14 @@ fn prefix_unknown_identifiers(
             || prefix_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything)
         }
         Expression::Function(_, args) => {
-            args.iter_mut().any(|arg| prefix_unknown_identifiers(arg, extra_vars, constants, modified_identifiers, modified_anything))
+            args.iter_mut().map(|arg| prefix_unknown_identifiers(arg, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         }
         Expression::Assignment(_, rhs) => prefix_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
         Expression::PartialDerivative(_, expr) => prefix_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
         Expression::DirectionalDerivative(_, expr, point, direction) => {
             prefix_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything)
-            || point.iter_mut().any(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything))
-            || direction.iter_mut().any(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything))
+            || point.iter_mut().map(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            || direction.iter_mut().map(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         },
         Expression::IfElse(x, y, z) => {
             // This will modify something iff at least either LHS or RHS is modified.
@@ -676,30 +727,35 @@ fn prefix_unknown_identifiers(
 /// Requires knowledge of the environment, i.e. the hashmaps 'constants' and 'functions'.
 /// 1. If the expression can be computed directly (e.g. "2+3" or "5*x" where constants.contains("x")), returns its value as type 'Object'.
 /// 2. If the expression is a valid definition (e.g. "x := 7" or "f(x) := 5*x+2"), modifies the environment accordingly and returns 'Object.Success'.
-///    Moreover, `extra_vars` allows to specify identifiers that temporarily should have a certain value.
+///    
+/// Moreover, `extra_vars` allows to specify identifiers that temporarily should have a certain value. Each hashmap in `extra_vars` should map
+/// identifiers to objects. The outer `Vec` acts as stack: this function first searches for identifers in the last hashmap in `extra_vars`, then
+/// in the fore-last, etc. until a match is found or the start of the vector is reached. The reason for this becomes apparent in the case
+/// `Expression::Function`: for recursive function calls, it is simpler to pass more and more hashmap references to `eval` than to modify
+/// the existing hashmap and later revert it to its old value.
 /// 
 /// If the evaluation fails, returns the corresponding error message (wrapped in a 'Result').
-/// 
-/// Note: for the most part, the expression will not be modified. The only case where it will is when comparing a function to something (cf. module documentation),
-/// because then, prefixing the identifiers in place is a lot cheaper than cloning the whole expression.
 pub fn eval(
     expr: &Expression,
-    extra_vars: &HashMap<&String, &Object>,
+    extra_vars: &VarStack,
     constants: &mut HashMap<String, Object>,
     functions: &mut HashMap<String, FunctionRepr>
 ) -> Result<Object, String> {
     match expr {
         Expression::None => Err("Received empty expression.".to_string()),
         Expression::Identifier(ident) => {
-            if let Some(x) = extra_vars.get(ident) {
-                Ok((*x).clone())
+            // First, iterate `extra_vars` in reverse order and search for `ident`.
+            if let Some(x) = extra_vars.lookup(ident) {
+                Ok(x.clone())
             }
+            // If nothing is found, look in `constants`.
             else if let Some(x) = constants.get(ident) {
                 Ok(x.clone())
                 // We only call 'clone' for every time a variable from 'constants' is used, which can only happen so often
                 // since the user still has to enter at least one character per time it is used. Therefore,
                 // even if these are large matrices, it is a totally acceptable runtime.
             }
+            // If still, nothing is found, this is an error.
             else {
                 Err(format!("Unknown identifier: {:?}", ident))
             }
@@ -735,6 +791,26 @@ pub fn eval(
                         Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Neg, Box::new(e)))),
                     }
                 }
+                UnaryOperation::Not => {
+                    match eval(rhs, extra_vars, constants, functions)? {
+                        Object::Success => Ok(Object::Success),
+                        Object::Undefined => Err("Operation 'Not' not valid for undefined operand.".to_string()),
+                        Object::Float(x) => Ok(Object::Float(if x == 0.0 {1.0} else {0.0})),
+                        Object::Vector(v) => Ok(Object::Vector(v.into_new(|x| if x == 0.0 {1.0} else {0.0}))),
+                        Object::Matrix(m) => Ok(Object::Matrix(m.into_new(|x| if x == 0.0 {1.0} else {0.0}))),
+                        Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Not, Box::new(e)))),
+                    }
+                }
+                UnaryOperation::Factorial => {
+                    match eval(rhs, extra_vars, constants, functions)? {
+                        Object::Success => Ok(Object::Success),
+                        Object::Undefined => Err("Operation 'Factorial' not valid for undefined operand.".to_string()),
+                        Object::Float(x) => Ok(Object::Float(x)), // TODO: add gamma function here and in the two lines below
+                        Object::Vector(x) => Ok(Object::Vector(-&x)),
+                        Object::Matrix(x) => Ok(Object::Matrix(-&x)),
+                        Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Factorial, Box::new(e)))),
+                    }
+                }
                 UnaryOperation::Abs => {
                     match eval(rhs, extra_vars, constants, functions)? {
                         Object::Success => Ok(Object::Success),
@@ -753,6 +829,7 @@ pub fn eval(
                 (a @ Expression::Function(..), b, BinaryOperation::Comp(_, param)) | (b, a @ Expression::Function(..), BinaryOperation::Comp(_, param)) => {
                     let mut this = a.clone(); let mut other = b.clone();
                     let mut free_variables = HashSet::<String>::new(); // This gathers all variables that will have to be randomized afterwards
+                    // TODO: rename function `prefix_unknown_identifiers`
                     prefix_unknown_identifiers(&mut this, extra_vars, constants, &mut free_variables, false);
                     let other_only_needs_single_eval = !prefix_unknown_identifiers(&mut other, extra_vars, constants, &mut free_variables, false);
                     let mut other_eval = Object::Success; // Placeholder
@@ -775,23 +852,22 @@ pub fn eval(
                         ?;
 
                     for _ in 0..repetitions {
-                        for ident in free_variables.iter() {
-                            // One seemingly doesn't get around `.clone()` here, but this is acceptable since these identifiers will be very short anyway.
-                            let x = rand::thread_rng().gen_range(-1000.0..1000.0);
-                            constants.insert(ident.clone(), Object::Float(x));
-                        }
-                        let first_eval = eval(&this, extra_vars, constants, functions)
-                            .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, constants, e)) // Add information to the error message
+                        let random_numbers: Vec<Object> = (0..free_variables.len()).map(|_| Object::Float(rand::thread_rng().gen_range(-1000.0..1000.0))).collect();
+                        let tmp_vars: HashMap<&String, &Object> = free_variables.iter().enumerate().map(|(i, ident)| (ident, &random_numbers[i])).collect();
+                        let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
+                        let first_eval = eval(&this, &new_stack, constants, functions)
+                            .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e)) // Add information to the error message
                             ?;
                         if !other_only_needs_single_eval {
-                            other_eval = eval(&other, extra_vars, constants, functions)
-                                .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, constants, e))
+                            other_eval = eval(&other, &new_stack, constants, functions)
+                                .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e))
                                 ?;
                         }
                         // If the objects' comparison yields `false`, return that. If the objects aren't comparable, return the appropriate error. Otherwise, continue.
-                        if let Object::Float(0.0) = math::objects::try_operation(&first_eval, &other_eval, op)
-                            .map_err(|_| format!("Couldn't compare `{}` and `{}` (arising from environment {:?}).", first_eval, other_eval, constants))? {
-                            return Ok(Object::Float(0.0));
+                        match math::objects::try_operation(&first_eval, &other_eval, op) {
+                            Ok(Object::Float(0.0)) => { return Ok(Object::Float(0.0)); }
+                            Err(_) => { return Err(format!("Couldn't compare `{}` and `{}` (arising from environment {:?}).", first_eval, other_eval, constants)); }
+                            _ => {}
                         }
                     }
                     Ok(Object::Float(1.0)) // If nothing previous returned, then the expressions fulfill the comparison.
@@ -846,46 +922,12 @@ pub fn eval(
             }
 
             // We're doing a little trick which is to remove the corresponding function from `functions` and reinserting it at the end.
+            // This is necessary since `functions` can't be borrowed as mutable and immutable twice at the same time (caused by recursive call to `eval`).
             // By transfer of ownership, this is a very cheap operation compared to cloning a `FunctionRepr` because the latter's
             // defining expression (if present) can be highly nested.
-            else if let Some(mut x) = functions.remove(function_name) {
-                let ret_value = match x {
-                    FunctionRepr::ByExpression(ref argnames, ref mut defining_expr) => {
-                        if given_arg_exprs.len() != argnames.len() {
-                            return Err(format!("Wrong number of arguments provided for function '{}' (expected {}, got {}).", function_name, argnames.len(), given_arg_exprs.len()));
-                        }
-                        // Define all temporary variables (arguments) using a recursive call of this function.
-                        // If one cannot be evaluated, return Err. Note that here, it is important not to use ?,
-                        // since on error, we have to revert `constants` to what it was before.
-                        let mut res = Option::<Result<Object, String>>::None;
-                        for (i, arg) in given_arg_exprs.iter().enumerate() {
-                            let inner_res = eval(arg, extra_vars, constants, functions);
-                            if let Ok(a) = inner_res {
-                                constants.insert(argnames[i].clone(), a);
-                            }
-                            else {
-                                res = Some(Err(format!("Couldn't resolve argument {} := {}.", argnames[i], arg)));
-                                break;
-                            }
-                        }
-                        if res.is_none() {
-                            // Now, simply evaluate the literal expression of the function.
-                            // This recursive call will also take care of type mismatches etc.
-                            res = Some(eval(defining_expr, extra_vars, constants, functions));
-                        }
-                        // Remove the temporary values from 'constants' and reinsert 'x' into 'functions'
-                        for argname in argnames.iter() {
-                            constants.remove(argname);
-                        }
-                        res.unwrap() // It is certain that `res` is not `None` at this point in time
-                    }
-                    FunctionRepr::Direct(ref f) => {
-                        (*f)(&given_arg_exprs.iter()
-                            .map(|arg_expr| eval(arg_expr, extra_vars, constants, functions))
-                            .collect::<Result<Vec<_>, _>>()?)
-                    }
-                };
-                functions.insert(function_name.clone(), x); // Reinsert the removed function
+            else if let Some(func) = functions.remove(function_name) {
+                let ret_value = eval_function(function_name, &func, given_arg_exprs, extra_vars, constants, functions);
+                functions.insert(function_name.clone(), func); // Reinsert the removed function
                 ret_value
             }
             else {Err(format!("No such function: {:?}", function_name))}
@@ -981,6 +1023,38 @@ pub fn eval(
                 Ok(x) => Err(format!("Couldn't evaluate condition {} to 0 or 1; got {x}", &**condition)),
                 other => other
             }
+        }
+    }
+}
+
+fn eval_function(
+    function_name: &String,
+    func: &FunctionRepr,
+    given_arg_exprs: &[Expression],
+    extra_vars: &VarStack,
+    constants: &mut HashMap<String, Object>,
+    functions: &mut HashMap<String, FunctionRepr>
+) -> Result<Object, String> {
+    match func {
+        FunctionRepr::ByExpression(ref argnames, ref defining_expr) => {
+            if given_arg_exprs.len() != argnames.len() {
+                return Err(format!("Wrong number of arguments provided for function '{}' (expected {}, got {}).", function_name, argnames.len(), given_arg_exprs.len()));
+            }
+            // Put all temporary variables (arguments) into a new hashmap and add it to `extra_vars`.
+            let tmp_var_evals = given_arg_exprs.iter().enumerate().map(
+                |(i, given_arg_expr)| {
+                    eval(given_arg_expr, extra_vars, constants, functions)
+                    .map_err(|e| format!("Couldn't resolve argument {} := {}. Traceback: {}", argnames[i], given_arg_expr, e))
+                }
+            ).collect::<Result<Vec<_>, _>>()?;
+            let tmp_vars: HashMap<&String, &Object> = tmp_var_evals.iter().enumerate().map(|(i, x)| (&argnames[i], x)).collect();
+            let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
+            eval(defining_expr, &new_stack, constants, functions)
+        }
+        FunctionRepr::Direct(ref f) => {
+            (*f)(&given_arg_exprs.iter()
+                .map(|arg_expr| eval(arg_expr, extra_vars, constants, functions))
+                .collect::<Result<Vec<_>, _>>()?)
         }
     }
 }

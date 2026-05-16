@@ -28,3 +28,6 @@ setTimeout(() => {
     input.setSelectionRange(0, input.selectionEnd);
 }, 0);
 "#;
+pub const FOCUS_MAIN_INPUT: &str = r#"
+document.getElementById("Display 1 Input").focus();
+"#;

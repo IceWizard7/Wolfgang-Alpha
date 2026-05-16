@@ -7,6 +7,7 @@ use crate::math::expressions::*;
 use crate::math::utils::approx_eq;
 use crate::math::{Object, DirectFunction, FunctionRepr, Vector, Matrix};
 use crate::math::operations::{BinaryOperation, UnaryOperation};
+use crate::defaults;
 use crate::parser;
 
 /// Differentiates the given expression w.r.t. the variable `wrt` analytically, that is, by parsing the expression recursively and
@@ -47,6 +48,10 @@ pub fn analytic_partial_derivative(
                 analytic_partial_derivative(rhs, wrt, functions)?
             )))
         }
+        Expression::UnaryOperation(UnaryOperation::Not, _) => Err("Cannot differentiate the operation `Not`.".to_string()),
+        Expression::UnaryOperation(UnaryOperation::Factorial, rhs) => {
+            unimplemented!() // TODO
+        }
         Expression::UnaryOperation(UnaryOperation::Abs, rhs) => {
             // TODO. Safe to say that `wrt` is real.
             // Add "if (...) {...} else {...}" as Expression so this can differentiate the cases x!=0 and x==0 in a mathematically correct way.
@@ -55,11 +60,11 @@ pub fn analytic_partial_derivative(
         Expression::BinaryOperation(lhs, op, rhs) => {
             let diff_l = analytic_partial_derivative(lhs, wrt, functions)?;
             let diff_r = analytic_partial_derivative(rhs, wrt, functions)?;
-            tracing::info!("Diff_l: {}", diff_l); tracing::info!("Diff_r: {}", diff_r);
             match op {
                 BinaryOperation::Add => Ok(simplify_add(diff_l, diff_r)),
                 BinaryOperation::Sub => Ok(simplify_sub(diff_l, diff_r)),
-                BinaryOperation::Quo | BinaryOperation::Rem => Err(format!("Differentiating the operation {} makes no sense.", op)),
+                BinaryOperation::Quo | BinaryOperation::Rem | BinaryOperation::And | BinaryOperation::Or
+                    => Err(format!("Cannot differentiate the operation `{op}`.")),
                 BinaryOperation::Mul => Ok(simplify_add(
                     simplify_mul(diff_l, *rhs.clone()), // f'(x) * g(x)
                     simplify_mul(*lhs.clone(), diff_r)  // f(x) * g'(x)
@@ -101,14 +106,14 @@ pub fn analytic_partial_derivative(
                         let mut diff_f = analytic_partial_derivative(f_expr, &f_argnames[0], functions)?;
                         diff_f.replace_identifiers(&f_argnames[0], &g_exprs[0]); // Plug in g(x) into f'
                         // If g only outputs one value, we can simply apply the 1d chain rule, (f \circ g)'(x) = g'(x) * f'(g(x)).
-                        Ok(Expression::BinaryOperation(
-                            Box::new(analytic_partial_derivative(&g_exprs[0], wrt, functions)?),
-                            BinaryOperation::Mul,
-                            Box::new(diff_f)
+                        Ok(simplify_mul(
+                            analytic_partial_derivative(&g_exprs[0], wrt, functions)?,
+                            diff_f
                         ))
                     }
                     else {
                         // Otherwise, the idea is to resolve Dg(x)[1] and then return an `Expression::DirectionalDerivative`.
+                        // TODO: improve this by adding a function that computes the directional derivative expression with a variable point
                         Ok(Expression::DirectionalDerivative(
                             f_argnames.clone(),
                             Box::new(f_expr.clone()),
@@ -120,23 +125,36 @@ pub fn analytic_partial_derivative(
                     }
                 }
                 Some(FunctionRepr::Direct(_)) => {
-                    // Importantly, note that the directional derivative is a separate function. Therefore, we can assume w.l.o.g. that `f \circ g` maps from `\R` to `\R`.
-                    // For each component of `g` (note that `g` maps from `\R` to `\R^n`), analytically differentiate that component w.r.t. `wrt` (which is the input of `g`).
-                    // We save these into a vector already to avoid calling `analytic_derivative` more often than necessary.
-                    // The returned expression should be (writing `x` for `wrt`)
-                    // ```d/dx f(g(x)) |_x
-                    //     = D(f \circ g)(x)[1]        (since `f \circ g` maps from `\R` to `\R`)
-                    //     = Df(g(x))[Dg(x)[1]]        (chain rule)```
-                    // In the program's syntax, this is equivalent to calling `___diff_num_f` with arguments `arg_expressions` concatenated with `(d/dx g_1, ... d/dx g_n)})`
-                    let mut new_args = g_exprs.clone(); // We don't own `expr`, so we have to clone `arg_expressions`.
-                    new_args.reserve(g_exprs.len());
-                    new_args.extend(g_exprs.iter()
-                        .map(|g_i| analytic_partial_derivative(g_i, wrt, functions))
-                        .collect::<Result<Vec<_>, _>>()?);
-                    Ok(Expression::Function(
-                        format!("___diff_num_{}", function_name),
-                        new_args
-                    ))
+                    // If `function_name` refers to a default function (e.g. `exp`), we can spare ourselves the below code.
+                    if defaults::DEFAULT_FUNCTION_NAMES.contains(&function_name.as_str()) {
+                        // Similar to the chain rule block in `analytic_directional_derivative`, with a little change: with the same f, g as there, we have
+                        //     D(f \circ g)(x)[1.0] = Df(g(x))[Dg(x)[1.0]]
+                        tracing::info!("Components of g: {:?}", g_exprs);
+                        let differentiated_components_of_g = g_exprs.iter().map(
+                            |g_i| analytic_partial_derivative(g_i, wrt, functions)
+                        ).collect::<Result<Vec<_>, _>>()?;
+                        tracing::info!("Differentiated components of g: {:?}", differentiated_components_of_g);
+                        Ok(defaults::get_default_derivative(function_name.as_str(), g_exprs, &differentiated_components_of_g)?)
+                    }
+                    else {
+                        // Importantly, note that the directional derivative is a separate function. Therefore, we can assume w.l.o.g. that `f \circ g` maps from `\R` to `\R`.
+                        // For each component of `g` (note that `g` maps from `\R` to `\R^n`), analytically differentiate that component w.r.t. `wrt` (which is the input of `g`).
+                        // We save these into a vector already to avoid calling `analytic_derivative` more often than necessary.
+                        // The returned expression should be (writing `x` for `wrt`)
+                        // ```d/dx f(g(x)) |_x
+                        //     = D(f \circ g)(x)[1]        (since `f \circ g` maps from `\R` to `\R`)
+                        //     = Df(g(x))[Dg(x)[1]]        (chain rule)```
+                        // In the program's syntax, this is equivalent to calling `___diff_num_f` with arguments `arg_expressions` concatenated with `(d/dx g_1, ... d/dx g_n)})`
+                        let mut new_args = g_exprs.clone(); // We don't own `expr`, so we have to clone `arg_expressions`.
+                        new_args.reserve(g_exprs.len());
+                        new_args.extend(g_exprs.iter()
+                            .map(|g_i| analytic_partial_derivative(g_i, wrt, functions))
+                            .collect::<Result<Vec<_>, _>>()?);
+                        Ok(Expression::Function(
+                            format!("___diff_num_{}", function_name),
+                            new_args
+                        ))
+                    }
                 }
                 None => Err(format!("No such function: {}", function_name))
             }
@@ -146,7 +164,6 @@ pub fn analytic_partial_derivative(
         Expression::PartialDerivative(wrt_other, inner) => {
             // Idea is simple: d/dx (d/dy f(x, y)) -> First evaluate the inner derivative, then differentiate the result.
             let res = analytic_partial_derivative(inner, wrt_other, functions)?;
-            tracing::info!("{}", res);
             analytic_partial_derivative( // Outer derivative
                 &res, // Inner derivative
                 wrt, functions
@@ -203,6 +220,10 @@ pub fn analytic_directional_derivative(
         Expression::UnaryOperation(UnaryOperation::Neg, rhs) => {
             Ok(-&analytic_directional_derivative(vars, rhs, point, direction, constants, functions)?)
         }
+        Expression::UnaryOperation(UnaryOperation::Not, _) => Err("Cannot differentiate the operation `Not`.".to_string()),
+        Expression::UnaryOperation(UnaryOperation::Factorial, rhs) => {
+            unimplemented!() // TODO
+        }
         Expression::UnaryOperation(UnaryOperation::Abs, rhs) => {
             // TODO: somehow determine what the RHS outputs? Probably not efficiently doable.
             // Rather, replace UnaryOperation::Abs with Abs, Norm, Det. Then split this into 3 cases.
@@ -214,21 +235,23 @@ pub fn analytic_directional_derivative(
             let diff_r = analytic_directional_derivative(vars, rhs, point, direction, constants, functions)?;
             match op {
                 BinaryOperation::Add | BinaryOperation::Sub => try_operation(&diff_l, &diff_r, op),
-                BinaryOperation::Quo | BinaryOperation::Rem => Err(format!("Differentiating the operation {} makes no sense.", op)),
+                BinaryOperation::Quo | BinaryOperation::Rem | BinaryOperation::And | BinaryOperation::Or => Err(format!("Cannot differentiate the operation `{op}`.")),
                 BinaryOperation::Mul => {
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
+                    let varstack = parser::VarStack::Frame { vars: &extra_vars, parent: &parser::VarStack::Empty };
                     try_operation(
-                        &try_operation(&diff_l, &parser::eval(rhs, &extra_vars, constants, functions)?, &BinaryOperation::Mul)?, // f'(x) * g(x)
-                        &try_operation(&parser::eval(lhs, &extra_vars, constants, functions)?, &diff_r, &BinaryOperation::Mul)?,  // f(x) * g'(x)
+                        &try_operation(&diff_l, &parser::eval(rhs, &varstack, constants, functions)?, &BinaryOperation::Mul)?, // f'(x) * g(x)
+                        &try_operation(&parser::eval(lhs, &varstack, constants, functions)?, &diff_r, &BinaryOperation::Mul)?,  // f(x) * g'(x)
                         &BinaryOperation::Add
                     )
                 },
                 BinaryOperation::Div => {
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
-                    let eval_lhs = parser::eval(lhs, &extra_vars, constants, functions)?;
+                    let varstack = parser::VarStack::Frame { vars: &extra_vars, parent: &parser::VarStack::Empty };
+                    let eval_lhs = parser::eval(lhs, &varstack, constants, functions)?;
                     try_operation( // d/dx (f(x) / g(x)) = (f'(x)g(x) - f(x)g'(x)) / g(x)²
                         &try_operation(
-                            &try_operation(&diff_l, &parser::eval(rhs, &extra_vars, constants, functions)?, &BinaryOperation::Mul)?,
+                            &try_operation(&diff_l, &parser::eval(rhs, &varstack, constants, functions)?, &BinaryOperation::Mul)?,
                             &try_operation(&eval_lhs, &diff_r, &BinaryOperation::Mul)?,
                             &BinaryOperation::Sub
                         )?,
@@ -238,9 +261,9 @@ pub fn analytic_directional_derivative(
                 }
                 BinaryOperation::Pow => {
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
-                    let eval_lhs = parser::eval(lhs, &extra_vars, constants, functions)?;
-                    let eval_rhs = parser::eval(rhs, &extra_vars, constants, functions)?;
-                    tracing::info!("LHS: {}; RHS: {}; dLHS: {}; dRHS: {}", eval_lhs, eval_rhs, diff_l, diff_r);
+                    let varstack = parser::VarStack::Frame { vars: &extra_vars, parent: &parser::VarStack::Empty };
+                    let eval_lhs = parser::eval(lhs, &varstack, constants, functions)?;
+                    let eval_rhs = parser::eval(rhs, &varstack, constants, functions)?;
                     try_operation( // d/dx (f(x) ^ g(x)) = f(x)^(g(x)-1) * (f'(x)g(x) + f(x)g'(x)ln(f(x)))
                         &try_operation(
                             &eval_lhs,
@@ -274,8 +297,9 @@ pub fn analytic_directional_derivative(
             ).collect::<Result<Vec<_>, _>>()?;
             // Then, compute g(p).
             let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
+            let varstack = parser::VarStack::Frame { vars: &extra_vars, parent: &parser::VarStack::Empty };
             let g_of_point = arg_expressions.iter().map(
-                |g_i| parser::eval(g_i, &extra_vars, constants, functions)
+                |g_i| parser::eval(g_i, &varstack, constants, functions)
             ).collect::<Result<Vec<_>, _>>()?;
             // Finally, apply the chain rule. If `f` has a representation via expression, we can get Df by a recursive call of this function.
             // In case of a direct representation, we have to fall back on a numerical directional derivative.
@@ -304,7 +328,8 @@ pub fn analytic_directional_derivative(
         Expression::IfElse(condition, iftrue, iffalse) => {
             // D (if c(x) {a(x)} else {b(x)})(x)[d] = if c(x) {Da(x)[d]} else {Db(x)[d]}
             let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
-            match parser::eval(condition, &extra_vars, constants, functions) {
+            let varstack = parser::VarStack::Frame { vars: &extra_vars, parent: &parser::VarStack::Empty };
+            match parser::eval(condition, &varstack, constants, functions) {
                 Ok(Object::Float(1.0)) => analytic_directional_derivative(vars, iftrue, point, direction, constants, functions),
                 Ok(Object::Float(0.0)) => analytic_directional_derivative(vars, iffalse, point, direction, constants, functions),
                 Ok(x) => Err(format!("Couldn't evaluate condition {condition} to 0 or 1; got {x}")),

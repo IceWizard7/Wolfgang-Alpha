@@ -36,13 +36,14 @@ impl fmt::Display for Expression {
             Expression::UnaryOperation(op, r) => {
                 match op {
                     UnaryOperation::Neg => write!(f, "(-({}))", r),
-                    UnaryOperation::Factorial => write!(f, "(!({}))", r),
+                    UnaryOperation::Not => write!(f, "!({})", r),
+                    UnaryOperation::Factorial => write!(f, "({})!", r),
                     UnaryOperation::Abs => write!(f, "|{}|", r),
                 }
             },
             Expression::BinaryOperation(l, op, r) => write!(f, "({} {} {})", l, op, r),
             Expression::Function(name, args)
-                => write!(f, "{}({})", name, args.iter().map(|x| format!("{:?}", x)).collect::<Vec<String>>().join(", ")),
+                => write!(f, "{}({})", name, args.iter().map(|x| format!("{}", x)).collect::<Vec<String>>().join(", ")),
             Expression::Assignment(lhs, rhs) => write!(f, "{} := {}", lhs, rhs),
             Expression::PartialDerivative(wrt, expr) => write!(f, "d/d{} ({})", wrt, expr),
             Expression::DirectionalDerivative(vars, expr, point, direction) => write!(f, "D_{{{}}} ({})({:?})[{:?}]", vars.join(", "), expr, point, direction),
@@ -80,7 +81,8 @@ impl Expression {
             Expression::UnaryOperation(op, r) => {
                 match op {
                     UnaryOperation::Neg => vec![format!("(-({}))", r)],
-                    UnaryOperation::Factorial => vec![format!("(!({}))", r)],
+                    UnaryOperation::Not => vec![format!("!({})", r)],
+                    UnaryOperation::Factorial => vec![format!("({})!", r)],
                     UnaryOperation::Abs => vec![format!("|{}|", r)],
                 }
             },
@@ -93,7 +95,7 @@ impl Expression {
             Expression::IfElse(condition, iftrue, iffalse) => vec![
                 format!("if ({condition}) {{"),
                 format!("    {iftrue}"),
-                "}} else {{".to_string(),
+                "} else {".to_string(),
                 format!("    {iffalse}"),
                 "}".to_string()
             ],
@@ -187,7 +189,7 @@ impl Expression {
     }
 }
 
-// The following macros simplify typing a LOT.
+// The following macros simplify typing and enhance readability by a LOT. I only add these that are actively used.
 #[macro_export]
 macro_rules! expr_if_else {
     ($condition:expr, $iftrue:expr, $iffalse:expr) => {
@@ -204,16 +206,6 @@ macro_rules! expr_compare {
         Expression::BinaryOperation(
             Box::new($lhs),
             BinaryOperation::Comp(Comparison::$comparison_operator, None),
-            Box::new($rhs)
-        )
-    };
-}
-#[macro_export]
-macro_rules! expr_add {
-    ($lhs:expr, $rhs:expr) => {
-        Expression::BinaryOperation(
-            Box::new($lhs),
-            BinaryOperation::Add,
             Box::new($rhs)
         )
     };
@@ -245,6 +237,44 @@ macro_rules! expr_div {
             Box::new($lhs),
             BinaryOperation::Div,
             Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_square {
+    ($lhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Pow,
+            Box::new(Expression::Number(2.0))
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_and {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::And,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_neg {
+    ($rhs:expr) => {
+        Expression::UnaryOperation(
+            UnaryOperation::Neg,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
+macro_rules! expr_1arg_func {
+    ($name:expr, $arg:expr) => {
+        Expression::Function(
+            $name.to_string(),
+            vec![$arg]
         )
     };
 }

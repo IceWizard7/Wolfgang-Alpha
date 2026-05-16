@@ -473,6 +473,17 @@ impl Vector {
     pub fn norm(&self) -> f64 {
         self.values.iter().map(|x| x.powi(2)).sum::<f64>().sqrt()
     }
+
+    /// Replaces every component `x` of the vector by `f(x)`.
+    pub fn transform<F>(&mut self, f: F) where F: Fn(f64) -> f64 {
+        for x in self.values.iter_mut() {
+            *x = f(*x);
+        }
+    }
+    /// Creates a new vector by applying f to every element of `self` while consuming `self`.
+    pub fn into_new<F>(self, f: F) -> Vector where F: Fn(f64) -> f64 {
+        Vector{values: self.values.into_iter().map(f).collect()}
+    }
 }
 
 impl Matrix {
@@ -491,6 +502,17 @@ impl Matrix {
     /// Encapsulated in order to keep the field `values` private.
     pub fn from(m: usize, n: usize, values: Vec<f64>) -> Matrix {
         Matrix{m, n, values}
+    }
+
+    /// Replaces every component `x` of the matrix by `f(x)`.
+    pub fn transform<F>(&mut self, f: F) where F: Fn(f64) -> f64 {
+        for x in self.values.iter_mut() {
+            *x = f(*x);
+        }
+    }
+    /// Creates a new matrix by applying f to every element of `self` while consuming `self`.
+    pub fn into_new<F>(self, f: F) -> Matrix where F: Fn(f64) -> f64 {
+        Matrix{m: self.m, n: self.n, values: self.values.into_iter().map(f).collect()}
     }
 
     pub fn row(&self, i: usize) -> Vector {

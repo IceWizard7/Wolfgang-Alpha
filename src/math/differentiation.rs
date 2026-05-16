@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use dioxus_logger::tracing;
-
 use crate::math::objects::{try_operation};
 use crate::math::expressions::*;
 use crate::math::utils::approx_eq;
@@ -129,11 +127,9 @@ pub fn analytic_partial_derivative(
                     if defaults::DEFAULT_FUNCTION_NAMES.contains(&function_name.as_str()) {
                         // Similar to the chain rule block in `analytic_directional_derivative`, with a little change: with the same f, g as there, we have
                         //     D(f \circ g)(x)[1.0] = Df(g(x))[Dg(x)[1.0]]
-                        tracing::info!("Components of g: {:?}", g_exprs);
                         let differentiated_components_of_g = g_exprs.iter().map(
                             |g_i| analytic_partial_derivative(g_i, wrt, functions)
                         ).collect::<Result<Vec<_>, _>>()?;
-                        tracing::info!("Differentiated components of g: {:?}", differentiated_components_of_g);
                         Ok(defaults::get_default_derivative(function_name.as_str(), g_exprs, &differentiated_components_of_g)?)
                     }
                     else {

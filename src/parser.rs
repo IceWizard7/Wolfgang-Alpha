@@ -32,7 +32,6 @@ use std::iter::Peekable;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::Chars;
-use dioxus_logger::tracing;
 use rand::Rng;
 
 use crate::math;
@@ -674,13 +673,11 @@ pub fn parse_function_definition(
     }
 }
 
-/// Similar to the above, but for the comparison of functions. Here, we prefix all unknown identifiers with three underscores.
-/// Importantly, this does not require cloning the expression, so we can simply modify everything in place.<br/>
-/// Moreover, all prefixed identifiers are saved in a hashset.
+/// Parses the expression `expr` recursively and collects all identifiers that are neither in `constants` nor in `extra_vars` into a HashSet `modified_identifiers`.
 /// 
 /// Returns whether or not anything was modified. The parameter `modified_anything` should be set to `false` for the first call and will then be passed down recursively.
-fn prefix_unknown_identifiers(
-    expr: &mut Expression,
+fn list_unknown_identifiers(
+    expr: &Expression,
     extra_vars: &VarStack,
     constants: &HashMap<String, Object>,
     modified_identifiers: &mut HashSet<String>,
@@ -690,33 +687,32 @@ fn prefix_unknown_identifiers(
         Expression::None | Expression::Number(_) | Expression::Vector(_) | Expression::Matrix(..) => modified_anything,
         Expression::Identifier(x) => {
             if !constants.contains_key(x) && extra_vars.lookup(x).is_none() {
-                //modified_identifiers.insert(format!("___tmp_{}", x));
                 modified_identifiers.insert(x.clone());
                 true
             }
             else { modified_anything }
         }
-        Expression::UnaryOperation(_, expr) => prefix_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
+        Expression::UnaryOperation(_, expr) => list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
         Expression::BinaryOperation(lhs, _, rhs) => {
             // This will modify something iff at least either LHS or RHS is modified.
-            prefix_unknown_identifiers(lhs, extra_vars, constants, modified_identifiers, modified_anything)
-            || prefix_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything)
+            list_unknown_identifiers(lhs, extra_vars, constants, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything)
         }
         Expression::Function(_, args) => {
-            args.iter_mut().map(|arg| prefix_unknown_identifiers(arg, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            args.iter().map(|arg| list_unknown_identifiers(arg, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         }
-        Expression::Assignment(_, rhs) => prefix_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
-        Expression::PartialDerivative(_, expr) => prefix_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
+        Expression::Assignment(_, rhs) => list_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
+        Expression::PartialDerivative(_, expr) => list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
         Expression::DirectionalDerivative(_, expr, point, direction) => {
-            prefix_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything)
-            || point.iter_mut().map(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
-            || direction.iter_mut().map(|v| prefix_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything)
+            || point.iter().map(|v| list_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            || direction.iter().map(|v| list_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         },
         Expression::IfElse(x, y, z) => {
             // This will modify something iff at least either LHS or RHS is modified.
-            prefix_unknown_identifiers(x, extra_vars, constants, modified_identifiers, modified_anything)
-            || prefix_unknown_identifiers(y, extra_vars, constants, modified_identifiers, modified_anything)
-            || prefix_unknown_identifiers(z, extra_vars, constants, modified_identifiers, modified_anything)
+            list_unknown_identifiers(x, extra_vars, constants, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(y, extra_vars, constants, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(z, extra_vars, constants, modified_identifiers, modified_anything)
         }
     }
 }
@@ -827,13 +823,12 @@ pub fn eval(
             match (&**lhs, &**rhs, op) {
                 // If the operation is a comparison and at least one of `lhs`, `rhs` is `Expression::Function` (which we'll call `this`; we'll call the remaining one `other`)...
                 (a @ Expression::Function(..), b, BinaryOperation::Comp(_, param)) | (b, a @ Expression::Function(..), BinaryOperation::Comp(_, param)) => {
-                    let mut this = a.clone(); let mut other = b.clone();
+                    let this = a.clone(); let other = b.clone();
                     let mut free_variables = HashSet::<String>::new(); // This gathers all variables that will have to be randomized afterwards
-                    // TODO: rename function `prefix_unknown_identifiers`
-                    prefix_unknown_identifiers(&mut this, extra_vars, constants, &mut free_variables, false);
-                    let other_only_needs_single_eval = !prefix_unknown_identifiers(&mut other, extra_vars, constants, &mut free_variables, false);
+                    list_unknown_identifiers(&this, extra_vars, constants, &mut free_variables, false);
+                    let other_only_needs_single_eval = !list_unknown_identifiers(&other, extra_vars, constants, &mut free_variables, false);
                     let mut other_eval = Object::Success; // Placeholder
-                    // If `other` doesn't contain any free variables (<=> the second `prefix_unknown_identifiers` call above actually modified the expression),
+                    // If `other` doesn't contain any free variables (<=> the second `list_unknown_identifiers` call above actually modified the expression),
                     // it suffices to evaluate `other` once.
                     // Then, evaluating every time would be inefficient, especially if many values will be tested.
                     // Therefore, it makes sense to check whether this is the case beforehand, and if so, simply evaluate once and save the value for later.

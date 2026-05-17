@@ -1,4 +1,5 @@
 use std::fmt;
+
 use crate::math::operations::*;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +26,9 @@ pub enum Expression {
     IfElse(Box<Expression>, Box<Expression>, Box<Expression>)
 }
 
+// Contains more parentheses than would be mathematically necessary because this is used for debugging.
+// `fmt::Debug` is very verbose (e.g. `Identifier("x"` instead of `x`); `fmt::Display` is supposed to maintain
+// the same level of precision while not being _as_ verbose.
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -54,14 +58,36 @@ impl fmt::Display for Expression {
 impl Expression {
     /// Formats an object to a string that may stretch over multiple lines.
     /// The lines will be returned as a vector of strings, not as a single string containing newline chars.
+    /// 
+    /// This function will attempt to avoid mathematically unnecessary parentheses for a more readable output.
     pub fn to_multline(&self) -> Vec<String> {
         match self {
             Expression::None => vec!["None".to_string()],
             Expression::Identifier(s) => vec![format!("{}", s)],
             Expression::Number(x) => vec![format!("{}", x)],
-            Expression::Vector(x) => vec![format!("[{}]", x.iter().map(|y| format!("{}", y)).collect::<Vec<String>>().join(", "))],
+            Expression::Vector(components) => {
+                let mut multlines = components.iter().map(|y| y.to_multline()).collect::<Vec<Vec<String>>>();
+                // We display the vector in expanded form (i.e. one component per line) if at least one of the following holds:
+                // A component spans multiple lines; a component has length >= 15 chars.
+                if multlines.iter().any(|v| v.len() > 1 || v.iter().any(|elem| elem.len() >= 15)) {
+                    let mut result = vec!["[".to_string()];
+                    multlines.iter_mut().for_each( // Indent every component of the vector and add a comma at the very end
+                        |v| {
+                            v.last_mut().unwrap().push(',');
+                            v.iter_mut().for_each(|x| x.insert_str(0, "  "));
+                        }
+                    );
+                    result.reserve(multlines.iter().map(|r| r.len()).sum());
+                    result.extend(multlines.into_iter().flatten());
+                    result.push("]".to_string());
+                    result
+                }
+                else {
+                    vec![format!("[{}]", multlines.into_iter().map(|v| v.into_iter().next().unwrap()).collect::<Vec<String>>().join(", "))]
+                }
+            }
             Expression::Matrix(m, n, x) => {
-                let values = x.iter().map(|b| format!("{}", b)).collect::<Vec<String>>();
+                let values = x.iter().map(|b| b.to_multline().join(" ")).collect::<Vec<String>>();
                 let column_lengths: Vec<usize> = (0..*n).map(
                     |j| (0..*m).map(
                         |i| values[i*n+j]
@@ -77,28 +103,112 @@ impl Expression {
                 }
                 lines.push(format!("╰{}╯", (0..row_length).map(|_| ' ').collect::<String>()));
                 lines
-            },
+            }
             Expression::UnaryOperation(op, r) => {
-                match op {
-                    UnaryOperation::Neg => vec![format!("(-({}))", r)],
-                    UnaryOperation::Not => vec![format!("!({})", r)],
-                    UnaryOperation::Factorial => vec![format!("({})!", r)],
-                    UnaryOperation::Abs => vec![format!("|{}|", r)],
+                // Here, only some types of `r` require extra parentheses around them. Specifically, if `op != Abs` (in which case no `r` needs parentheses),
+                // UnaryOp(neither Abs nor op if matches!(op, Factorial|Not)), BinaryOp, Assignment, and both Derivatives
+                // need extra parentheses around them.
+                let mut multlined_inner = r.to_multline();
+                if op != &UnaryOperation::Abs
+                && matches!(&**r, Expression::BinaryOperation(..) | Expression::Assignment(..) | Expression::PartialDerivative(..) | Expression::DirectionalDerivative(..))
+                || matches!(&**r, Expression::UnaryOperation(other_op, _) if other_op != &UnaryOperation::Abs && !(other_op == op && matches!(op, UnaryOperation::Factorial | UnaryOperation::Not))) {
+                    multlined_inner[0].insert(0, '(');
+                    multlined_inner.last_mut().unwrap().push(')');
                 }
-            },
-            Expression::BinaryOperation(l, op, r) => vec![format!("({} {} {})", l, op, r)],
-            Expression::Function(name, args)
-                => vec![format!("{}({})", name, args.iter().map(|x| format!("{}", x)).collect::<Vec<String>>().join(", "))],
-            Expression::Assignment(lhs, rhs) => vec![format!("{} := {}", lhs, rhs)],
-            Expression::PartialDerivative(wrt, expr) => vec![format!("d/d{} ({})", wrt, expr)],
-            Expression::DirectionalDerivative(vars, expr, point, direction) => vec![format!("D_{{{}}} ({})({:?})[{:?}]", vars.join(", "), expr, point, direction)],
-            Expression::IfElse(condition, iftrue, iffalse) => vec![
-                format!("if ({condition}) {{"),
-                format!("    {iftrue}"),
-                "} else {".to_string(),
-                format!("    {iffalse}"),
-                "}".to_string()
-            ],
+                op.format_with_multline_expr(&mut multlined_inner);
+                multlined_inner
+            }
+            Expression::BinaryOperation(l, op, r) => {
+                // The left side needs parentheses if it is one of the following:
+                // Assignment, a Derivative, a BinaryOp of strictly lower priority than `op`
+                let mut multlined_left = l.to_multline();
+                if matches!(&**l, Expression::Assignment(..) | Expression::PartialDerivative(..) | Expression::DirectionalDerivative(..))
+                || matches!(&**l, Expression::BinaryOperation(_, other_op, _) if other_op.priority() < op.priority()) {
+                    multlined_left[0].insert(0, '(');
+                    multlined_left.last_mut().unwrap().push(')');
+                }
+                // The right side needs parentheses if it is one of the following:
+                // Assignment, a Derivative, a BinaryOp of lower OR EQUAL priority to `op`
+                let mut multlined_right = r.to_multline();
+                if matches!(&**r, Expression::Assignment(..) | Expression::PartialDerivative(..) | Expression::DirectionalDerivative(..))
+                || matches!(&**r, Expression::BinaryOperation(_, other_op, _) if other_op.priority() <= op.priority()) {
+                    multlined_right[0].insert(0, '(');
+                    multlined_right.last_mut().unwrap().push(')');
+                }
+                let mut right_iter = multlined_right.into_iter();
+                multlined_left.last_mut().unwrap().push_str(format!(
+                    "{}{}",
+                    match op {
+                        BinaryOperation::Pow => op.as_str().to_string(),
+                        BinaryOperation::Mul if matches!(&**l, Expression::Number(_)) && !matches!(&**r, Expression::Number(_) | Expression::IfElse(..)) => String::new(),
+                        _ => format!(" {} ", op.as_str())
+                    },
+                    right_iter.next().unwrap()).as_str()
+                );
+                multlined_left.extend(right_iter);
+                multlined_left
+            }
+            Expression::Function(name, args) => {
+                let mut multlines = args.iter().map(|y| y.to_multline()).collect::<Vec<Vec<String>>>();
+                // We display the vector in expanded form (i.e. one component per line) if at least one of the following holds:
+                // A component spans multiple lines; a component has length >= 15 chars.
+                if multlines.iter().any(|v| v.len() > 1 || v.iter().any(|elem| elem.len() >= 15)) {
+                    let mut result = vec![format!("{name}(")];
+                    multlines.iter_mut().for_each( // Indent every component of the vector and add a comma at the very end
+                        |v| {
+                            v.last_mut().unwrap().push(',');
+                            v.iter_mut().for_each(|x| x.insert_str(0, "  "));
+                        }
+                    );
+                    result.reserve(multlines.iter().map(|r| r.len()).sum());
+                    result.extend(multlines.into_iter().flatten());
+                    result.push(")".to_string());
+                    result
+                }
+                else {
+                    vec![format!("{}({})", name, multlines.into_iter().map(|v| v.into_iter().next().unwrap()).collect::<Vec<String>>().join(", "))]
+                }
+            }
+            Expression::Assignment(l, r) => {
+                let mut multlined_left = l.to_multline();
+                let multlined_right = r.to_multline();
+                let mut right_iter = multlined_right.into_iter();
+                multlined_left.last_mut().unwrap().push_str(format!(" := {}", right_iter.next().unwrap()).as_str());
+                multlined_left.extend(right_iter);
+                multlined_left
+            }
+            Expression::PartialDerivative(wrt, expr) => {
+                let mut multlined = expr.to_multline();
+                multlined[0].insert_str(0, format!("d/d{} (", wrt).as_str());
+                multlined.last_mut().unwrap().push(')');
+                multlined
+            }
+            Expression::DirectionalDerivative(vars, expr, point, direction) => {
+                let mut multlined_expr = expr.to_multline();
+                let multlined_point = point.iter().map(|x| x.to_multline()).collect::<Vec<Vec<String>>>();
+                let multlined_direction = direction.iter().map(|x| x.to_multline()).collect::<Vec<Vec<String>>>();
+                multlined_expr[0].insert_str(0, format!("D_{{{}}} (", vars.join(", ")).as_str());
+                multlined_expr.last_mut().unwrap().push_str(format!(
+                    ")({})[{}]",
+                    multlined_point.into_iter().map(|v| v.join(" ")).collect::<Vec<String>>().join(", "),
+                    multlined_direction.into_iter().map(|v| v.join(" ")).collect::<Vec<String>>().join(", "),
+                ).as_str());
+                multlined_expr
+            }
+            Expression::IfElse(condition, iftrue, iffalse) => {
+                let mut multlined_cond = condition.to_multline();
+                let mut multlined_true = iftrue.to_multline();
+                let mut multlined_false = iffalse.to_multline();
+                multlined_true.iter_mut().for_each(|x| x.insert_str(0, "  "));
+                multlined_false.iter_mut().for_each(|x| x.insert_str(0, "  "));
+                multlined_cond[0].insert_str(0, "if (");
+                multlined_cond.last_mut().unwrap().push_str(") {");
+                multlined_cond.extend(multlined_true);
+                multlined_cond.push("} else {".to_string());
+                multlined_cond.extend(multlined_false);
+                multlined_cond.push("}".to_string());
+                multlined_cond
+            }
         }
     }
 }
@@ -128,9 +238,21 @@ pub fn simplify_sub(lhs: Expression, rhs: Expression) -> Expression {
 /// 
 /// If one term is `0`, returns `0`. If one term is `1`, returns the other one. Otherwise, returns `lhs * rhs`.
 pub fn simplify_mul(lhs: Expression, rhs: Expression) -> Expression {
+    let (lhs, rhs) = match (lhs, rhs) { // Put the Expression::Number first if there is one
+        (n @ Expression::Number(_), other) | (other, n @ Expression::Number(_)) => (n, other),
+        other => other
+    };
     match (lhs, rhs) {
-        (Expression::Number(0.0), _) | (_, Expression::Number(0.0)) => Expression::Number(0.0),
-        (Expression::Number(1.0), x) | (x, Expression::Number(1.0)) => x,
+        (Expression::Number(0.0), _) => Expression::Number(0.0),
+        (Expression::Number(1.0), other) => other,
+        (Expression::Number(x), Expression::Number(y)) => Expression::Number(x*y),
+        (Expression::Number(x), Expression::BinaryOperation(inner_l, BinaryOperation::Mul, inner_r))
+        | (Expression::BinaryOperation(inner_l, BinaryOperation::Mul, inner_r), Expression::Number(x)) => {
+            match (*inner_l, *inner_r) {
+                (Expression::Number(y), other) | (other, Expression::Number(y)) => crate::expr_mul!(Expression::Number(x*y), other),
+                (inner_l, inner_r) => crate::expr_mul!(Expression::Number(x), crate::expr_mul!(inner_l, inner_r))
+            }
+        }
         (lhs, rhs) => Expression::BinaryOperation(Box::new(lhs), BinaryOperation::Mul, Box::new(rhs))
     }
 }

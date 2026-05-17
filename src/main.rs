@@ -7,7 +7,6 @@ use web_sys::window;
 
 mod math;
 mod parser;
-use crate::js_snippets::FOCUS_MAIN_INPUT;
 pub use crate::parser::*;
 mod defaults;
 mod js_snippets;
@@ -57,7 +56,7 @@ fn scroll_to_bottom(id: &str) {
 }
 
 /// Given the user input as parameter, returns the new lines to be added to the console.
-fn validate_input(input: String) -> Vec<String> {
+fn validate_input(input: &str) -> Vec<String> {
     // This creates a mutable variable that can only be accessed and modified from inside this function (making it safe)
     // while retaining its value between function calls.
     thread_local! {
@@ -65,7 +64,7 @@ fn validate_input(input: String) -> Vec<String> {
         static FUNCTIONS: RefCell<HashMap<String, math::FunctionRepr>> = RefCell::new(defaults::default_functions());
     }
 
-    let mut parser = Parser::new(&input);
+    let mut parser = Parser::new(input);
     //tracing::info!("{:?}", parser.tokens);
     let mut output = Vec::<String>::new();
     CONSTANTS.with(|c: &RefCell<HashMap<String, math::Object>>| {
@@ -134,7 +133,7 @@ fn App() -> Element {
                         value: "{input_value}",
                         oninput: move |event| input_value.set(event.value()), // Update 'input_value' every time the content of the input field is modified
                         onmounted: |_| {
-                            dioxus::document::eval(FOCUS_MAIN_INPUT);
+                            call_js_on_dom_update!(FOCUS_MAIN_INPUT);
                         },
                         onkeydown: move |event| {
                             let modifiers = event.modifiers();
@@ -146,7 +145,7 @@ fn App() -> Element {
                                     let input = input_value();
                                     let mut cl = console_lines();
                                     let mut pc = previous_commands();
-                                    let mut new_lines = validate_input(input.clone());
+                                    let mut new_lines = validate_input(&input);
                                     // If we newly add N lines to the LHS, we want to use the first line of the RHS to show the command
                                     // and fill the remaining N-1 lines with some filler (currently "│"; the box drawing char, not the pipe char).
                                     pc.push(input);

@@ -66,7 +66,6 @@ impl Object {
                 lines
             }
             Object::LiteralExpression(x) => x.to_multline()
-            //Object::Boolean(x) => vec![(if *x { "True" } else { "False" }).to_string()]
         }
     }
 }

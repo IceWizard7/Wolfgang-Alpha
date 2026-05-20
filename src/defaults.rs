@@ -3,7 +3,7 @@ use std::f64::consts;
 use crate::math::Expression;
 use crate::math::expressions;
 use crate::math::{Object, FunctionRepr};
-use crate::math::operations::{Comparison, UnaryOperation, BinaryOperation};
+use crate::math::operations::{UnaryOperation, BinaryOperation};
 use crate::{expr_if_else, expr_and, expr_compare, expr_sub, expr_mul, expr_div, expr_square, expr_neg, expr_1arg_func};
 
 /// Wrapped in a function because const hashmaps aren't available yet.
@@ -91,19 +91,6 @@ macro_rules! get_default_derivative_macro1 {
         }
     };
 }
-/// (point) => Ok(point[0].clone()) if point has length 1 otherwise Err
-macro_rules! get_default_derivative_macro2 {
-    ($point:expr, $direction:expr) => {
-        if $point.len() != 1 {
-            Err(format!(
-                "Wrong number of arguments provided for derivative (expected 1, got {}).",
-                $point.len()
-            ))
-        } else {
-            Ok(expressions::simplify_mul($point[0].clone(), $direction[0].clone()))
-        }
-    };
-}
 
 /// If `function_name` is among the default functions, returns its derivative at point `point` in direction `direction` (provided it exists; if it simply doesn't exist, returns `Expression::None`).
 /// If there is a greater error, e.g. no such default function or wrong number of arguments given, returns the corresponding `Err`.
@@ -115,12 +102,18 @@ pub fn get_default_derivative(function_name: &str, point: &[Expression], directi
     match function_name {
         "exp" => get_default_derivative_macro1!(exp, point, direction),
         "ln" => {
-            let p = get_default_derivative_macro2!(point, direction)?;
-            Ok(expr_if_else!(
-                expr_compare!(p.clone(), Gt, Expression::Number(0.0)),
-                expr_div!(Expression::Number(1.0), p),
-                Expression::None
-            ))
+            if point.len() != 1 {
+                Err(format!(
+                    "Wrong number of arguments provided for derivative (expected 1, got {}).",
+                    point.len()
+                ))
+            } else {
+                Ok(expr_if_else!(
+                    expr_compare!(point[0].clone(), Gt, Expression::Number(0.0)),
+                    expr_div!(direction[0].clone(), point[0].clone()),
+                    Expression::None
+                ))
+            }
         }
         "log" => {
             // D log(x, b)[s, t] = s \partial_x log(x, b) + t \partial_b log(x, b) = s/(x*ln(y)) - (t*ln(x))/(b*ln(b)²)     for x, b > 0
@@ -152,15 +145,21 @@ pub fn get_default_derivative(function_name: &str, point: &[Expression], directi
             ))
         }
         "sqrt" => {
-            let p = get_default_derivative_macro2!(point, direction)?;
-            Ok(expr_if_else!(
-                expr_compare!(p.clone(), Gt, Expression::Number(0.0)),
-                expr_div!(
-                    Expression::Number(1.0),
-                    expr_mul!(Expression::Number(2.0), expr_1arg_func!("sqrt", p))
-                ),
-                Expression::None
-            ))
+            if point.len() != 1 {
+                Err(format!(
+                    "Wrong number of arguments provided for derivative (expected 1, got {}).",
+                    point.len()
+                ))
+            } else {
+                Ok(expr_if_else!(
+                    expr_compare!(point[0].clone(), Gt, Expression::Number(0.0)),
+                    expr_div!(
+                        direction[0].clone(),
+                        expr_mul!(Expression::Number(2.0), expr_1arg_func!("sqrt", point[0].clone()))
+                    ),
+                    Expression::None
+                ))
+            }
         }
         "cos" => Ok(expr_neg!(get_default_derivative_macro1!(sin, point, direction)?)),
         "sin" => get_default_derivative_macro1!(cos, point, direction),

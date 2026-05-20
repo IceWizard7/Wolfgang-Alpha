@@ -43,6 +43,7 @@ impl fmt::Display for Expression {
                     UnaryOperation::Not => write!(f, "!({})", r),
                     UnaryOperation::Factorial => write!(f, "({})!", r),
                     UnaryOperation::Abs => write!(f, "|{}|", r),
+                    UnaryOperation::Norm(opt) => write!(f, "||{}||{}", r, format_optional_subscript(opt)),
                 }
             },
             Expression::BinaryOperation(l, op, r) => write!(f, "({} {} {})", l, op, r),
@@ -105,13 +106,14 @@ impl Expression {
                 lines
             }
             Expression::UnaryOperation(op, r) => {
-                // Here, only some types of `r` require extra parentheses around them. Specifically, if `op != Abs` (in which case no `r` needs parentheses),
+                // Here, only some types of `r` require extra parentheses around them. Specifically, if `op != Abs` and `op != Norm` (in which case no `r` needs parentheses),
                 // UnaryOp(neither Abs nor op if matches!(op, Factorial|Not)), BinaryOp, Assignment, and both Derivatives
                 // need extra parentheses around them.
                 let mut multlined_inner = r.to_multline();
-                if op != &UnaryOperation::Abs
+                let op_is_not_abs_or_norm = op != &UnaryOperation::Abs && !matches!(op, UnaryOperation::Norm(_));
+                if op_is_not_abs_or_norm
                 && matches!(&**r, Expression::BinaryOperation(..) | Expression::Assignment(..) | Expression::PartialDerivative(..) | Expression::DirectionalDerivative(..))
-                || matches!(&**r, Expression::UnaryOperation(other_op, _) if other_op != &UnaryOperation::Abs && !(other_op == op && matches!(op, UnaryOperation::Factorial | UnaryOperation::Not))) {
+                || matches!(&**r, Expression::UnaryOperation(other_op, _) if op_is_not_abs_or_norm && !(other_op == op && matches!(op, UnaryOperation::Factorial | UnaryOperation::Not))) {
                     multlined_inner[0].insert(0, '(');
                     multlined_inner.last_mut().unwrap().push(')');
                 }
@@ -327,7 +329,7 @@ macro_rules! expr_compare {
     ($lhs:expr, $comparison_operator:ident, $rhs:expr) => {
         Expression::BinaryOperation(
             Box::new($lhs),
-            BinaryOperation::Comp(Comparison::$comparison_operator, None),
+            BinaryOperation::Comp($crate::math::operations::Comparison::$comparison_operator, None),
             Box::new($rhs)
         )
     };

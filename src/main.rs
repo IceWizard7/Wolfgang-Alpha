@@ -1,13 +1,11 @@
 use dioxus::prelude::*;
-use dioxus_logger::tracing;
 use std::vec::Vec;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use web_sys::window;
 
 mod math;
-mod parser;
-pub use crate::parser::*;
+mod lang;
 mod defaults;
 mod js_snippets;
 
@@ -64,29 +62,37 @@ fn validate_input(input: &str) -> Vec<String> {
         static FUNCTIONS: RefCell<HashMap<String, math::FunctionRepr>> = RefCell::new(defaults::default_functions());
     }
 
-    let mut parser = Parser::new(input);
-    //tracing::info!("{:?}", parser.tokens);
+
+    let tokens = match lang::tokenize(input) {
+        Ok(x) => x,
+        Err(e) => {return vec![format!("[ERROR] {e}")];}
+    };
+    let mut parser = lang::Parser::from(tokens);
     let mut output = Vec::<String>::new();
+    //tracing::info!("{:?}", parser.tokens);
     CONSTANTS.with(|c: &RefCell<HashMap<String, math::Object>>| {
         let mut constants = c.borrow_mut();
         FUNCTIONS.with(|f| {
             let mut functions = f.borrow_mut();
-            let expressions = parser.parse(&mut constants, &mut functions);
-            tracing::info!("{}", expressions.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join("; "));
-            for expr in expressions {
-                let eval = eval(&expr, &parser::VarStack::Empty, &mut constants, &mut functions);
-                match eval {
-                    Ok(obj) => {
-                        output = obj.to_multline();
+            match parser.parse(&mut constants, &mut functions) {
+                Ok(expressions) => {
+                    // tracing::info!("{}", expressions.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join("; "));
+                    for expr in expressions {
+                        let eval = lang::eval(&expr, &lang::evaluator::VarStack::Empty, &mut constants, &mut functions);
+                        match eval {
+                            Ok(obj) => {
+                                output = obj.to_multline();
+                            }
+                            Err(e) => {
+                                output.push(format!("[ERROR] {}", e));
+                            }
+                        }
                     }
-                    Err(e) => {
-                        output.push(format!("[ERROR] {}", e));
-                    }
-                }
-            }
+                },
+                Err(e) => {output.push(format!("[ERROR] {}", e));}
+            };
         });
     });
-    
     output
 }
 

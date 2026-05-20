@@ -1,6 +1,18 @@
 use std::fmt;
 use crate::math::expressions::Expression;
 
+/// If `opt` is `Some(x)`, returns "_x" if x is an identifier or a number and "_{x}" otherwise.
+/// If `opt` is `None`, returns an empty string.
+pub fn format_optional_subscript(opt: &Option<Box<Expression>>) -> String {
+    if let Some(e) = opt {
+        match &**e {
+            Expression::Number(x) => format!("_{x}"),
+            Expression::Identifier(x) => format!("_{x}"),
+            other => format!("_{{{other}}}"),
+        }
+    } else {String::new()}
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Comparison { Eq, Gt, Ge, Lt, Le }
 impl Comparison {
@@ -79,12 +91,13 @@ impl fmt::Debug for BinaryOperation {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UnaryOperation {
     Neg,
     Not,
     Factorial,
     Abs,
+    Norm(Option<Box<Expression>>),
 }
 
 impl fmt::Display for UnaryOperation {
@@ -94,6 +107,7 @@ impl fmt::Display for UnaryOperation {
             UnaryOperation::Not => write!(f, "!"),
             UnaryOperation::Factorial => write!(f, "!"),
             UnaryOperation::Abs => write!(f, "|_|"),
+            UnaryOperation::Norm(opt) => write!(f, "||_||{}", format_optional_subscript(opt)),
         }
     }
 }
@@ -105,7 +119,14 @@ impl UnaryOperation {
             UnaryOperation::Neg => expr[0].insert(0, '-'),
             UnaryOperation::Not => expr[0].insert(0, '!'),
             UnaryOperation::Factorial => expr.last_mut().unwrap().push('!'),
-            UnaryOperation::Abs => {expr[0].insert(0, '|'); expr.last_mut().unwrap().push('|');},
+            UnaryOperation::Abs => {
+                expr[0].insert(0, '|');
+                expr.last_mut().unwrap().push('|');
+            }
+            UnaryOperation::Norm(opt) => {
+                expr[0].insert_str(0, "||");
+                expr.last_mut().unwrap().push_str(format!("||{}", format_optional_subscript(opt)).as_str());
+            }
         }
     }
 }

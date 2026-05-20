@@ -12,10 +12,17 @@ use std::cmp::min;
 
 use crate::math::utils;
 
+/// Set this constant such that `BLOCK^2 * 8` fits in your L1 Cache. Find out the capacity of the latter by running `sudo lshw -C memory`.
+/// 
+/// My L1 Cache is 512 KiB bit, so I set the constant to 128 (256 would theoretically fit, but I want to leave some space for potential other things).
+const BLOCK: usize = 64;
 
+
+#[derive(Clone, PartialEq)]
 pub struct Vector {
     pub values: Vec<f64>
 }
+#[derive(Clone, PartialEq)]
 pub struct Matrix {
     pub m: usize,
     pub n: usize,
@@ -34,20 +41,6 @@ impl<I> ops::IndexMut<I> for Vector where I: SliceIndex<[f64]> {
         &mut self.values[index]
     }
 }
-
-impl Clone for Vector {
-    fn clone(&self) -> Self {
-        Vector { values: self.values.clone() }
-    }
-}
-
-impl PartialEq for Vector {
-    fn eq(&self, other: &Self) -> bool {
-        self.values.len() == other.values.len()
-        && (0..self.values.len()).all(|i| self.values[i] == other.values[i])
-    }
-}
-impl Eq for Vector {}
 
 // Current output format: Vec<5>: [3, 1, 4, 1, 5]
 impl fmt::Debug for Vector {
@@ -202,18 +195,6 @@ impl ops::Neg for &Vector {
 }
 
 
-// impl<I> ops::Index<I> for Matrix where I: SliceIndex<[Vec<f64>]> {
-//     type Output = I::Output;
-//     fn index(&self, index: I) -> &Self::Output {
-//         &self.values[index]
-//     }
-// }
-// impl<I> ops::IndexMut<I> for Matrix where I: SliceIndex<[Vec<f64>]> {
-//     fn index_mut(&mut self, index: I) -> &mut Self::Output {
-//         &mut self.values[index]
-//     }
-// }
-
 impl Matrix {
     #[inline]
     pub fn get(&self, i: usize, j: usize) -> f64 {
@@ -225,21 +206,6 @@ impl Matrix {
         self.values[i * self.n + j] = value;
     }
 }
-
-impl Clone for Matrix {
-    fn clone(&self) -> Self {
-        Matrix { m: self.m, n: self.n, values: self.values.clone() }
-    }
-}
-
-impl PartialEq for Matrix {
-    fn eq(&self, other: &Self) -> bool {
-        self.m == other.m
-        && self.n == other.n
-        && (0..self.m*self.n).all(|i| self.values[i] == other.values[i])
-    }
-}
-impl Eq for Matrix {}
 
 impl fmt::Debug for Matrix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -453,13 +419,25 @@ impl ops::Mul<&Matrix> for &Matrix {
             None
         }
         else {
+            let rhs_transposed = rhs.transpose(); // Improves Cache locality, only O(n²)
             let mut values = Vec::<f64>::with_capacity(self.m * rhs.n);
             for i in 0..self.m {
                 for j in 0..rhs.n {
-                    values.push((0..self.n).map(|k| self.get(i, k) * rhs.get(k, j)).sum())
+                    values.push(
+                        (0..self.n)
+                            .map(|k| {
+                                self.values[i * self.n + k]
+                                    * rhs_transposed.values[j * rhs_transposed.n + k]
+                            })
+                            .sum(),
+                    )
                 }
             }
-            Some(Matrix{ m: self.m, n: rhs.n, values })
+            Some(Matrix {
+                m: self.m,
+                n: rhs.n,
+                values,
+            })
         }
     }
 }
@@ -467,11 +445,6 @@ impl ops::Mul<&Matrix> for &Matrix {
 impl Vector {
     pub fn len(&self) -> usize {
         self.values.len()
-    }
-
-    /// Returns the standard euclidian R^n-norm of the vector.
-    pub fn norm(&self) -> f64 {
-        self.values.iter().map(|x| x.powi(2)).sum::<f64>().sqrt()
     }
 
     /// Replaces every component `x` of the vector by `f(x)`.
@@ -523,16 +496,28 @@ impl Matrix {
     }
 
     pub fn transpose(&self) -> Matrix {
-        let mut values = Vec::<f64>::with_capacity(self.values.len());
-        for j in 0..self.n {
-            for i in 0..self.m {
-                values.push(self.get(i, j));
+        // Cache friendly. By definition, a `BLOCK x BLOCK` tile of the matrix fits into the L1 cache entirely.
+        // Hence, we transpose tile by tile.
+        let mut values = vec![0.0f64; self.values.len()];
+        for i_block in (0..self.m).step_by(BLOCK) {
+            for j_block in (0..self.n).step_by(BLOCK) {
+                let i_end = (i_block + BLOCK).min(self.m);
+                let j_end = (j_block + BLOCK).min(self.n);
+                for i in i_block..i_end {
+                    for j in j_block..j_end {
+                        // Read: row-major access within tile (sequential)
+                        // Write: row-major in output (sequential within tile)
+                        values[j * self.m + i] = self.values[i * self.n + j];
+                    }
+                }
             }
         }
-        Matrix {m: self.n, n: self.m, values}
+
+        Matrix { m: self.n, n: self.m, values }
     }
 
     pub fn identity(n: usize) -> Matrix {
+        if n == 0 {return Matrix{m: 0, n: 0, values: Vec::<f64>::new()};}
         let mut values = Vec::<f64>::with_capacity(n*n);
         values.push(1.0);
         for _ in 0..n-1 {
@@ -588,5 +573,32 @@ impl Matrix {
             // This immediately implies that the matrix is not invertible, that is, it has determinant zero.
             0.0
         }
+    }
+}
+
+
+pub enum VectorNorm {
+    P(f64),
+    Sup
+}
+
+impl Vector {
+    pub fn norm(&self, norm_type: &VectorNorm) -> f64 {
+        // TODO generalize
+        self.values.iter().map(|x| x.powi(2)).sum::<f64>().sqrt()
+    }
+}
+
+
+pub enum MatrixNorm {
+    P(f64),
+    Frobenius,
+    Sup
+}
+
+impl Matrix {
+    pub fn norm(&self, norm_type: &MatrixNorm) -> f64 {
+        // TODO
+        unimplemented!()
     }
 }

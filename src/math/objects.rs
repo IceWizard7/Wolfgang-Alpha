@@ -105,7 +105,7 @@ impl ops::Neg for &Object {
     }
 }
 
-pub type DirectFunction = Box<dyn Fn(&Vec<Object>) -> Result<Object, String>>;
+pub type DirectFunction = Box<dyn Fn(&[Object]) -> Result<Object, String>>;
 
 /// Different representations for a function
 pub enum FunctionRepr {
@@ -231,11 +231,20 @@ pub fn try_operation(lhs: &Object, rhs: &Object, op: &BinaryOperation) -> Result
                     if let BinaryOperation::Pow = op {
                         // Matrix exponentiation is only accepted when the exponent is an integer (a.k.a. approximately equal to an integer)
                         let exponent = y.round();
-                        if approx_eq(&exponent, y) && *y >= 0.0 {
-                            // I didn't use `fold` here because if one step of the operation fails, `None` should be returned (instead of panicking).
-                            (0..exponent as i64)
-                                .try_fold(Matrix::identity(x.m), |acc, _| (&acc * x).ok_or_else(err_msg))
-                                .map(Object::Matrix)
+                        if x.m == x.n && approx_eq(&exponent, y) && *y >= 0.0 {
+                            let mut result = Matrix::identity(x.m);
+                            let mut base = x.clone();
+                            let mut remaining = exponent as u64;
+                            while remaining > 0 {
+                                if remaining % 2 == 1 {
+                                    result = (&result * &base).ok_or_else(err_msg)?;
+                                }
+                                remaining /= 2;
+                                if remaining > 0 {
+                                    base = (&base * &base).ok_or_else(err_msg)?;
+                                }
+                            }
+                            Ok(Object::Matrix(result))
                         }
                         else {err()}
                     }

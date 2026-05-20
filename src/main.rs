@@ -39,7 +39,7 @@ fn Display(content: Vec<String>) -> Element {
 }
 
 fn get_element_by_id(id: &str) -> Option<web_sys::Element> {
-    window().unwrap().document().unwrap().get_element_by_id(id)
+    window()?.document()?.get_element_by_id(id)
 }
 
 // fn scroll_to_top(id: &str) {
@@ -94,9 +94,7 @@ fn validate_input(input: &str) -> Vec<String> {
 fn App() -> Element {
     let mut input_value = use_signal(String::new);
     let mut console_lines = use_signal(Vec::<String>::new);
-    let joined_lines = console_lines().join("\n");
     let mut previous_commands = use_signal(Vec::<String>::new);
-    let joined_previous_commands = previous_commands().join("\n");
     // Set to 0 every time an input is validated.
     // Pressing the up arrow increases it by 1 (until it hits `previous_commands.len()`),
     // pressing the down arrow decreases it by 1 (until it hits 1).
@@ -121,8 +119,16 @@ fn App() -> Element {
                 class: "fullwidth",
                 class: "fullheight",
                 div { class: "display_top_part",
-                    div { class: "previous_lines", "{joined_lines}" }
-                    div { class: "previous_commands", "{joined_previous_commands}" }
+                    div { class: "previous_lines",
+                        for (index , line) in console_lines().into_iter().enumerate() {
+                            div { key: "{index}", "{line}" }
+                        }
+                    }
+                    div { class: "previous_commands",
+                        for (index , command) in previous_commands().into_iter().enumerate() {
+                            div { key: "{index}", "{command}" }
+                        }
+                    }
                 }
                 div { class: "display_bottom_part",
                     ">"

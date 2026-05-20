@@ -8,17 +8,17 @@
 //! 
 //! Some common enums/structs/etc. are made directly accessible, e.g. `Matrix` and `Vector`.
 
-pub mod matrices_and_vectors;
-
-pub use crate::math::matrices_and_vectors::{Matrix, Vector};
-pub mod utils;
-pub mod operations;
-pub use crate::math::operations::{Comparison, BinaryOperation, UnaryOperation};
-pub mod objects;
-pub use crate::math::objects::{Object, DirectFunction, FunctionRepr};
-pub mod expressions;
-pub use crate::math::expressions::Expression;
 pub mod differentiation;
+pub mod expressions;
+pub mod matrices_and_vectors;
+pub mod objects;
+pub mod operations;
+pub mod utils;
+
+pub use crate::math::expressions::Expression;
+pub use crate::math::matrices_and_vectors::{Matrix, Vector};
+pub use crate::math::objects::{Object, DirectFunction, FunctionRepr};
+pub use crate::math::operations::{Comparison, BinaryOperation, UnaryOperation};
 
 // pub struct Env {
 //     constants: HashMap<String, Object>,

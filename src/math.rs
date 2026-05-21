@@ -8,6 +8,8 @@
 //! 
 //! Some common enums/structs/etc. are made directly accessible, e.g. `Matrix` and `Vector`.
 
+use std::collections::HashMap;
+
 pub mod differentiation;
 pub mod expressions;
 pub mod matrices_and_vectors;
@@ -20,8 +22,7 @@ pub use crate::math::matrices_and_vectors::{Matrix, Vector};
 pub use crate::math::objects::{Object, DirectFunction, FunctionRepr};
 pub use crate::math::operations::{Comparison, BinaryOperation, UnaryOperation};
 
-// pub struct Env {
-//     constants: HashMap<String, Object>,
-//     functions: HashMap<String, FunctionRepr>,
-
-// }
+pub struct Env {
+    pub constants: HashMap<String, Object>,
+    pub functions: HashMap<String, FunctionRepr>
+}

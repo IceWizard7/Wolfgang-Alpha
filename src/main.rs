@@ -1,6 +1,5 @@
 use dioxus::prelude::*;
 use std::vec::Vec;
-use std::collections::HashMap;
 use std::cell::RefCell;
 use web_sys::window;
 
@@ -58,8 +57,10 @@ fn validate_input(input: &str) -> Vec<String> {
     // This creates a mutable variable that can only be accessed and modified from inside this function (making it safe)
     // while retaining its value between function calls.
     thread_local! {
-        static CONSTANTS: RefCell<HashMap<String, math::Object>> = RefCell::new(defaults::default_constants());
-        static FUNCTIONS: RefCell<HashMap<String, math::FunctionRepr>> = RefCell::new(defaults::default_functions());
+        static ENV: RefCell<math::Env> = RefCell::new(math::Env {
+            constants: defaults::default_constants(),
+            functions: defaults::default_functions()
+        });
     }
 
 
@@ -69,29 +70,25 @@ fn validate_input(input: &str) -> Vec<String> {
     };
     let mut parser = lang::Parser::from(tokens);
     let mut output = Vec::<String>::new();
-    //tracing::info!("{:?}", parser.tokens);
-    CONSTANTS.with(|c: &RefCell<HashMap<String, math::Object>>| {
-        let mut constants = c.borrow_mut();
-        FUNCTIONS.with(|f| {
-            let mut functions = f.borrow_mut();
-            match parser.parse(&mut constants, &mut functions) {
-                Ok(expressions) => {
-                    // tracing::info!("{}", expressions.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join("; "));
-                    for expr in expressions {
-                        let eval = lang::eval(&expr, &lang::evaluator::VarStack::Empty, &mut constants, &mut functions);
-                        match eval {
-                            Ok(obj) => {
-                                output = obj.to_multline();
-                            }
-                            Err(e) => {
-                                output.push(format!("[ERROR] {}", e));
-                            }
+    ENV.with(|c: &RefCell<math::Env>| {
+        let mut env = c.borrow_mut();
+        match parser.parse(&mut env) {
+            Ok(expressions) => {
+                // tracing::info!("{}", expressions.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join("; "));
+                for expr in expressions {
+                    let eval = lang::eval(&expr, &lang::evaluator::VarStack::Empty, &mut env);
+                    match eval {
+                        Ok(obj) => {
+                            output = obj.to_multline();
+                        }
+                        Err(e) => {
+                            output.push(format!("[ERROR] {}", e));
                         }
                     }
-                },
-                Err(e) => {output.push(format!("[ERROR] {}", e));}
-            };
-        });
+                }
+            },
+            Err(e) => {output.push(format!("[ERROR] {}", e));}
+        };
     });
     output
 }

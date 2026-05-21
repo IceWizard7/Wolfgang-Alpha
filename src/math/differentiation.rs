@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
 use crate::math::objects::{try_operation};
 use crate::math::expressions::*;
 use crate::math::utils::approx_eq;
-use crate::math::{Object, DirectFunction, FunctionRepr, Vector, Matrix};
+use crate::math::{Env, Object, DirectFunction, FunctionRepr, Vector, Matrix};
 use crate::math::operations::{BinaryOperation, UnaryOperation};
 use crate::{defaults, expr_compare, expr_if_else, expr_neg, lang};
 use lang::evaluator::VarStack;
@@ -21,7 +19,7 @@ use lang::evaluator::VarStack;
 pub fn analytic_partial_derivative(
     expr: &Expression,
     wrt: &String,
-    functions: &HashMap<String, FunctionRepr>
+    env: &Env
 ) -> Result<Expression, String> {
     match expr {
         Expression::None => Ok(Expression::None),
@@ -30,20 +28,20 @@ pub fn analytic_partial_derivative(
         Expression::Vector(entries) => {
             Ok(Expression::Vector(
                 entries.iter()
-                .map(|x| analytic_partial_derivative(x, wrt, functions))
+                .map(|x| analytic_partial_derivative(x, wrt, env))
                 .collect::<Result<Vec<_>, _>>()?
             ))
         }
         Expression::Matrix(m, n, entries) => {
             Ok(Expression::Matrix(*m, *n,
                 entries.iter()
-                .map(|x| analytic_partial_derivative(x, wrt, functions))
+                .map(|x| analytic_partial_derivative(x, wrt, env))
                 .collect::<Result<Vec<_>, _>>()?
             ))
         }
         Expression::UnaryOperation(UnaryOperation::Neg, rhs) => {
             Ok(Expression::UnaryOperation(UnaryOperation::Neg, Box::new(
-                analytic_partial_derivative(rhs, wrt, functions)?
+                analytic_partial_derivative(rhs, wrt, env)?
             )))
         }
         Expression::UnaryOperation(UnaryOperation::Not, _) => Err("Cannot differentiate the operation `Not`.".to_string()),
@@ -51,7 +49,7 @@ pub fn analytic_partial_derivative(
             unimplemented!() // TODO: implement when integrals are available via \Gamma'(x) = \int_0^\infty e^{-t} t^{x-1} ln(t) dt.
         }
         Expression::UnaryOperation(UnaryOperation::Abs, rhs) => {
-            let diff_r = analytic_partial_derivative(rhs, wrt, functions)?;
+            let diff_r = analytic_partial_derivative(rhs, wrt, env)?;
             Ok(expr_if_else!(
                 expr_compare!(*rhs.clone(), Gt, Expression::Number(0.0)),
                 diff_r.clone(),
@@ -67,7 +65,7 @@ pub fn analytic_partial_derivative(
                 Expression::Vector(..) => {unimplemented!()} // TODO
                 Expression::Matrix(..) => {unimplemented!()} // TODO
                 rhs => {
-                    let diff_r = analytic_partial_derivative(rhs, wrt, functions)?;
+                    let diff_r = analytic_partial_derivative(rhs, wrt, env)?;
                     Ok(expr_if_else!(
                         expr_compare!(rhs.clone(), Gt, Expression::Number(0.0)),
                         diff_r.clone(),
@@ -81,8 +79,8 @@ pub fn analytic_partial_derivative(
             }
         }
         Expression::BinaryOperation(lhs, op, rhs) => {
-            let diff_l = analytic_partial_derivative(lhs, wrt, functions)?;
-            let diff_r = analytic_partial_derivative(rhs, wrt, functions)?;
+            let diff_l = analytic_partial_derivative(lhs, wrt, env)?;
+            let diff_r = analytic_partial_derivative(rhs, wrt, env)?;
             match op {
                 BinaryOperation::Add => Ok(simplify_add(diff_l, diff_r)),
                 BinaryOperation::Sub => Ok(simplify_sub(diff_l, diff_r)),
@@ -121,16 +119,16 @@ pub fn analytic_partial_derivative(
             // to clone `function_name` once, but this is fast since `function_name` typically only is `f`, `g`, etc.
             // For simplicity, I'll subsequently write `f` instead of `function_name`.
             // Define `g` such that `f(arg_expressions) = f(g(wrt))`. This explains the above name `g_exprs`
-            match functions.get(function_name) {
+            match env.functions.get(function_name) {
                 Some(FunctionRepr::ByExpression(f_argnames, f_expr)) => {
                     // As discussed in the case `FunctionRepr::Direct`, we aim to return `Df(g(x))[Dg(x)[1]]` as an expression,
                     // not as a value.
                     if g_exprs.len() == 1 {
-                        let mut diff_f = analytic_partial_derivative(f_expr, &f_argnames[0], functions)?;
+                        let mut diff_f = analytic_partial_derivative(f_expr, &f_argnames[0], env)?;
                         diff_f.replace_identifiers(&f_argnames[0], &g_exprs[0]); // Plug in g(x) into f'
                         // If g only outputs one value, we can simply apply the 1d chain rule, (f \circ g)'(x) = g'(x) * f'(g(x)).
                         Ok(simplify_mul(
-                            analytic_partial_derivative(&g_exprs[0], wrt, functions)?,
+                            analytic_partial_derivative(&g_exprs[0], wrt, env)?,
                             diff_f
                         ))
                     }
@@ -142,7 +140,7 @@ pub fn analytic_partial_derivative(
                             Box::new(f_expr.clone()),
                             g_exprs.clone(),
                             g_exprs.iter()
-                                .map(|g_i| analytic_partial_derivative(g_i, wrt, functions))
+                                .map(|g_i| analytic_partial_derivative(g_i, wrt, env))
                                 .collect::<Result<Vec<_>, _>>()?
                         ))
                     }
@@ -153,7 +151,7 @@ pub fn analytic_partial_derivative(
                         // Similar to the chain rule block in `analytic_directional_derivative`, with a little change: with the same f, g as there, we have
                         //     D(f \circ g)(x)[1.0] = Df(g(x))[Dg(x)[1.0]]
                         let differentiated_components_of_g = g_exprs.iter().map(
-                            |g_i| analytic_partial_derivative(g_i, wrt, functions)
+                            |g_i| analytic_partial_derivative(g_i, wrt, env)
                         ).collect::<Result<Vec<_>, _>>()?;
                         Ok(defaults::get_default_derivative(function_name.as_str(), g_exprs, &differentiated_components_of_g)?)
                     }
@@ -169,7 +167,7 @@ pub fn analytic_partial_derivative(
                         let mut new_args = g_exprs.clone(); // We don't own `expr`, so we have to clone `arg_expressions`.
                         new_args.reserve(g_exprs.len());
                         new_args.extend(g_exprs.iter()
-                            .map(|g_i| analytic_partial_derivative(g_i, wrt, functions))
+                            .map(|g_i| analytic_partial_derivative(g_i, wrt, env))
                             .collect::<Result<Vec<_>, _>>()?);
                         Ok(Expression::Function(
                             format!("___diff_num_{}", function_name),
@@ -184,17 +182,17 @@ pub fn analytic_partial_derivative(
         Expression::Assignment(..) => Err("Assignment cannot be differentiated.".to_string()),
         Expression::PartialDerivative(wrt_other, inner) => {
             // Idea is simple: d/dx (d/dy f(x, y)) -> First evaluate the inner derivative, then differentiate the result.
-            let res = analytic_partial_derivative(inner, wrt_other, functions)?;
+            let res = analytic_partial_derivative(inner, wrt_other, env)?;
             analytic_partial_derivative( // Outer derivative
                 &res, // Inner derivative
-                wrt, functions
+                wrt, env
             )
         }
         Expression::DirectionalDerivative(..)
             // The directional derivative is an object, so whatever it actually is, its derivative is zero.
             => Ok(Expression::Number(0.0)),
         Expression::IfElse(x, y, z)
-            => Ok(Expression::IfElse(x.clone(), Box::new(analytic_partial_derivative(y, wrt, functions)?), Box::new(analytic_partial_derivative(z, wrt, functions)?))),
+            => Ok(Expression::IfElse(x.clone(), Box::new(analytic_partial_derivative(y, wrt, env)?), Box::new(analytic_partial_derivative(z, wrt, env)?))),
     }
 }
 
@@ -206,8 +204,7 @@ pub fn analytic_directional_derivative(
     expr: &Expression,
     point: &[Object],
     direction: &[Object],
-    constants: &mut HashMap<String, Object>,
-    functions: &mut HashMap<String, FunctionRepr>
+    env: &mut Env
 ) -> Result<Object, String> {
     match expr {
         Expression::None => Err("Cannot differentiate expression `None`.".to_string()),
@@ -219,7 +216,7 @@ pub fn analytic_directional_derivative(
             let mut new_entries = Vec::<f64>::with_capacity(entries.len());
             // We instantiate this vector via a loop to allow us to return a special error message if a component can be evaluated, but not to a float.
             for x in entries {
-                match analytic_directional_derivative(vars, x, point, direction, constants, functions) {
+                match analytic_directional_derivative(vars, x, point, direction, env) {
                     Ok(Object::Float(new_entry)) => { new_entries.push(new_entry); }
                     Ok(_) => { return Err(format!("Derivative of entry {:?} is not of type `float`.", *x))} // Entries of vector must be f64
                     other => { return other; } // Redirect error message
@@ -230,7 +227,7 @@ pub fn analytic_directional_derivative(
         Expression::Matrix(m, n, entries) => {
             let mut new_entries = Vec::<f64>::with_capacity(entries.len());
             for x in entries {
-                match analytic_directional_derivative(vars, x, point, direction, constants, functions) {
+                match analytic_directional_derivative(vars, x, point, direction, env) {
                     Ok(Object::Float(new_entry)) => { new_entries.push(new_entry); }
                     Ok(_) => { return Err(format!("Derivative of entry {:?} is not of type `float`.", *x))} // Entries of vector must be f64
                     other => { return other; } // Redirect error message
@@ -239,7 +236,7 @@ pub fn analytic_directional_derivative(
             Ok(Object::Matrix(Matrix::from(*m, *n, new_entries)))
         }
         Expression::UnaryOperation(UnaryOperation::Neg, rhs) => {
-            Ok(-&analytic_directional_derivative(vars, rhs, point, direction, constants, functions)?)
+            Ok(-&analytic_directional_derivative(vars, rhs, point, direction, env)?)
         }
         Expression::UnaryOperation(UnaryOperation::Not, _) => Err("Cannot differentiate the operation `Not`.".to_string()),
         Expression::UnaryOperation(UnaryOperation::Factorial, _) => {
@@ -258,8 +255,8 @@ pub fn analytic_directional_derivative(
             unimplemented!()
         }
         Expression::BinaryOperation(lhs, op, rhs) => {
-            let diff_l = analytic_directional_derivative(vars, lhs, point, direction, constants, functions)?;
-            let diff_r = analytic_directional_derivative(vars, rhs, point, direction, constants, functions)?;
+            let diff_l = analytic_directional_derivative(vars, lhs, point, direction, env)?;
+            let diff_r = analytic_directional_derivative(vars, rhs, point, direction, env)?;
             match op {
                 BinaryOperation::Add | BinaryOperation::Sub => try_operation(&diff_l, &diff_r, op),
                 BinaryOperation::Quo | BinaryOperation::Rem | BinaryOperation::And | BinaryOperation::Or => Err(format!("Cannot differentiate the operation `{op}`.")),
@@ -267,16 +264,16 @@ pub fn analytic_directional_derivative(
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
                     let varstack = VarStack::Frame { vars: &extra_vars, parent: &VarStack::Empty };
                     try_operation(
-                        &try_operation(&diff_l, &lang::eval(rhs, &varstack, constants, functions)?, &BinaryOperation::Mul)?, // f'(x) * g(x)
-                        &try_operation(&lang::eval(lhs, &varstack, constants, functions)?, &diff_r, &BinaryOperation::Mul)?,  // f(x) * g'(x)
+                        &try_operation(&diff_l, &lang::eval(rhs, &varstack, env)?, &BinaryOperation::Mul)?, // f'(x) * g(x)
+                        &try_operation(&lang::eval(lhs, &varstack, env)?, &diff_r, &BinaryOperation::Mul)?,  // f(x) * g'(x)
                         &BinaryOperation::Add
                     )
                 },
                 BinaryOperation::Div => {
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
                     let varstack = VarStack::Frame { vars: &extra_vars, parent: &VarStack::Empty };
-                    let eval_lhs = lang::eval(lhs, &varstack, constants, functions)?;
-                    let eval_rhs = lang::eval(rhs, &varstack, constants, functions)?;
+                    let eval_lhs = lang::eval(lhs, &varstack, env)?;
+                    let eval_rhs = lang::eval(rhs, &varstack, env)?;
                     try_operation( // d/dx (f(x) / g(x)) = (f'(x)g(x) - f(x)g'(x)) / g(x)²
                         &try_operation(
                             &try_operation(&diff_l, &eval_rhs, &BinaryOperation::Mul)?,
@@ -290,8 +287,8 @@ pub fn analytic_directional_derivative(
                 BinaryOperation::Pow => {
                     let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
                     let varstack = VarStack::Frame { vars: &extra_vars, parent: &VarStack::Empty };
-                    let eval_lhs = lang::eval(lhs, &varstack, constants, functions)?;
-                    let eval_rhs = lang::eval(rhs, &varstack, constants, functions)?;
+                    let eval_lhs = lang::eval(lhs, &varstack, env)?;
+                    let eval_rhs = lang::eval(rhs, &varstack, env)?;
                     try_operation( // d/dx (f(x) ^ g(x)) = f(x)^(g(x)-1) * (f'(x)g(x) + f(x)g'(x)ln(f(x)))
                         &try_operation(
                             &eval_lhs,
@@ -321,33 +318,33 @@ pub fn analytic_directional_derivative(
             //     D(f \circ g)(p)[d] = Df(g(p))[Dg(p)[d]]
             // First, compute Dg(p)[d], which may be a vector, so simply differentiate componentwise.
             let differentiated_components_of_g = arg_expressions.iter().map(
-                |g_i| analytic_directional_derivative(vars, g_i, point, direction, constants, functions)
+                |g_i| analytic_directional_derivative(vars, g_i, point, direction, env)
             ).collect::<Result<Vec<_>, _>>()?;
             // Then, compute g(p).
             let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
             let varstack = VarStack::Frame { vars: &extra_vars, parent: &VarStack::Empty };
             let g_of_point = arg_expressions.iter().map(
-                |g_i| lang::eval(g_i, &varstack, constants, functions)
+                |g_i| lang::eval(g_i, &varstack, env)
             ).collect::<Result<Vec<_>, _>>()?;
             // Finally, apply the chain rule. If `f` has a representation via expression, we can get Df by a recursive call of this function.
             // In case of a direct representation, we have to fall back on a numerical directional derivative.
-            let reinsert_later = functions.remove(function_name).ok_or(format!("No such function: {}", function_name))?;
+            let reinsert_later = env.functions.remove(function_name).ok_or(format!("No such function: {}", function_name))?;
             let res = match reinsert_later {
                 FunctionRepr::ByExpression(ref argnames, ref function_expr) => analytic_directional_derivative(
-                    argnames, function_expr, &g_of_point, &differentiated_components_of_g, constants, functions
+                    argnames, function_expr, &g_of_point, &differentiated_components_of_g, env
                 ),
                 FunctionRepr::Direct(ref f) => numerical_directional_derivative(
                     f, g_of_point, differentiated_components_of_g
                 )
             };
-            functions.insert(function_name.clone(), reinsert_later);
+            env.functions.insert(function_name.clone(), reinsert_later);
             res
         }
         // You can't differentiate expressions like `y := ...`, that makes no sense. If the user wants `y := d/dx ...`, he should have typed that. 
         Expression::Assignment(..) => Err("Assignment cannot be differentiated.".to_string()),
         Expression::PartialDerivative(wrt_other, inner) => {
             // Idea is simple: d/dx (d/dy f(x, y)) -> First evaluate the inner derivative, then differentiate the result.
-            analytic_directional_derivative(vars, &analytic_partial_derivative(inner, wrt_other, functions)?, point, direction, constants, functions)
+            analytic_directional_derivative(vars, &analytic_partial_derivative(inner, wrt_other, env)?, point, direction, env)
         }
         Expression::DirectionalDerivative(..) => {
             // The directional derivative is an object, so whatever it actually is, its derivative is zero.
@@ -357,9 +354,9 @@ pub fn analytic_directional_derivative(
             // D (if c(x) {a(x)} else {b(x)})(x)[d] = if c(x) {Da(x)[d]} else {Db(x)[d]}
             let extra_vars = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
             let varstack = VarStack::Frame { vars: &extra_vars, parent: &VarStack::Empty };
-            match lang::eval(condition, &varstack, constants, functions) {
-                Ok(Object::Float(1.0)) => analytic_directional_derivative(vars, iftrue, point, direction, constants, functions),
-                Ok(Object::Float(0.0)) => analytic_directional_derivative(vars, iffalse, point, direction, constants, functions),
+            match lang::eval(condition, &varstack, env) {
+                Ok(Object::Float(1.0)) => analytic_directional_derivative(vars, iftrue, point, direction, env),
+                Ok(Object::Float(0.0)) => analytic_directional_derivative(vars, iffalse, point, direction, env),
                 Ok(x) => Err(format!("Couldn't evaluate condition {condition} to 0 or 1; got {x}")),
                 other => other
             }

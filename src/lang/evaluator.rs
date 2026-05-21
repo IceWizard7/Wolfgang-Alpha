@@ -7,7 +7,7 @@ use statrs::function::gamma;
 
 use crate::math;
 use crate::math::utils::approx_eq;
-use crate::math::{BinaryOperation, UnaryOperation, Object, Expression, FunctionRepr}; // Common types that will be used several times
+use crate::math::{BinaryOperation, Env, UnaryOperation, Object, Expression, FunctionRepr}; // Common types that will be used several times
 
 
 const DEFAULT_TESTEQ_REPETITIONS: i64 = 100;
@@ -56,14 +56,14 @@ impl<'a> VarStack<'a> {
 pub fn parse_function_definition(
     expr: &Expression,
     argument_names: &Vec<String>,
-    constants: &HashMap<String, Object>
+    env: &Env
 ) -> Expression {
     match expr {
         Expression::None => Expression::None,
         Expression::Identifier(x) => {
             if argument_names.contains(x) {
                 Expression::Identifier(format!("___tmp_{}", x))
-            } else if let Some(y) = constants.get(x) {
+            } else if let Some(y) = env.constants.get(x) {
                 match y { // As discussed in this function's documentation, clone will be necessary here
                     Object::Success | Object::Undefined => Expression::None, // This would be a syntax error
                     Object::Float(x) => Expression::Number(*x),
@@ -80,39 +80,39 @@ pub fn parse_function_definition(
             }
         },
         Expression::Number(x) => Expression::Number(*x),
-        Expression::Vector(x) => Expression::Vector(x.iter().map(|x| parse_function_definition(x, argument_names, constants)).collect()),
-        Expression::Matrix(m, n, x) => Expression::Matrix(*m, *n, x.iter().map(|x| parse_function_definition(x, argument_names, constants)).collect()),
+        Expression::Vector(x) => Expression::Vector(x.iter().map(|x| parse_function_definition(x, argument_names, env)).collect()),
+        Expression::Matrix(m, n, x) => Expression::Matrix(*m, *n, x.iter().map(|x| parse_function_definition(x, argument_names, env)).collect()),
         Expression::UnaryOperation(op, rhs) => Expression::UnaryOperation(
             op.clone(),
-            Box::new(parse_function_definition(rhs, argument_names, constants))
+            Box::new(parse_function_definition(rhs, argument_names, env))
         ),
         Expression::BinaryOperation(lhs, op, rhs) => Expression::BinaryOperation(
-            Box::new(parse_function_definition(lhs, argument_names, constants)),
+            Box::new(parse_function_definition(lhs, argument_names, env)),
             op.clone(),
-            Box::new(parse_function_definition(rhs, argument_names, constants))
+            Box::new(parse_function_definition(rhs, argument_names, env))
         ),
         Expression::Function(function_name, args) => Expression::Function(
             function_name.clone(),
-            args.iter().map(|x| parse_function_definition(x, argument_names, constants)).collect()
+            args.iter().map(|x| parse_function_definition(x, argument_names, env)).collect()
         ),
         Expression::Assignment(lhs, rhs) => Expression::Assignment(
-            Box::new(parse_function_definition(lhs, argument_names, constants)),
-            Box::new(parse_function_definition(rhs, argument_names, constants))
+            Box::new(parse_function_definition(lhs, argument_names, env)),
+            Box::new(parse_function_definition(rhs, argument_names, env))
         ),
         Expression::PartialDerivative(wrt, expr) => Expression::PartialDerivative(
             wrt.clone(),
-            Box::new(parse_function_definition(expr, argument_names, constants))
+            Box::new(parse_function_definition(expr, argument_names, env))
         ),
         Expression::DirectionalDerivative(vars, expr, point, direction) => Expression::DirectionalDerivative(
             vars.clone(),
-            Box::new(parse_function_definition(expr, argument_names, constants)),
-            point.iter().map(|x| parse_function_definition(x, argument_names, constants)).collect(),
-            direction.iter().map(|x| parse_function_definition(x, argument_names, constants)).collect()
+            Box::new(parse_function_definition(expr, argument_names, env)),
+            point.iter().map(|x| parse_function_definition(x, argument_names, env)).collect(),
+            direction.iter().map(|x| parse_function_definition(x, argument_names, env)).collect()
         ),
         Expression::IfElse(x, y, z) => Expression::IfElse(
-            Box::new(parse_function_definition(x, argument_names, constants)),
-            Box::new(parse_function_definition(y, argument_names, constants)),
-            Box::new(parse_function_definition(z, argument_names, constants)),
+            Box::new(parse_function_definition(x, argument_names, env)),
+            Box::new(parse_function_definition(y, argument_names, env)),
+            Box::new(parse_function_definition(z, argument_names, env)),
         )
     }
 }
@@ -123,40 +123,40 @@ pub fn parse_function_definition(
 fn list_unknown_identifiers(
     expr: &Expression,
     extra_vars: &VarStack,
-    constants: &HashMap<String, Object>,
+    env: &Env,
     modified_identifiers: &mut HashSet<String>,
     modified_anything: bool
 ) -> bool {
     match expr {
         Expression::None | Expression::Number(_) | Expression::Vector(_) | Expression::Matrix(..) => modified_anything,
         Expression::Identifier(x) => {
-            if !constants.contains_key(x) && extra_vars.lookup(x).is_none() {
+            if !env.constants.contains_key(x) && extra_vars.lookup(x).is_none() {
                 modified_identifiers.insert(x.clone());
                 true
             }
             else { modified_anything }
         }
-        Expression::UnaryOperation(_, expr) => list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
+        Expression::UnaryOperation(_, expr) => list_unknown_identifiers(expr, extra_vars, env, modified_identifiers, modified_anything),
         Expression::BinaryOperation(lhs, _, rhs) => {
             // This will modify something iff at least either LHS or RHS is modified.
-            list_unknown_identifiers(lhs, extra_vars, constants, modified_identifiers, modified_anything)
-            || list_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything)
+            list_unknown_identifiers(lhs, extra_vars, env, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(rhs, extra_vars, env, modified_identifiers, modified_anything)
         }
         Expression::Function(_, args) => {
-            args.iter().map(|arg| list_unknown_identifiers(arg, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            args.iter().map(|arg| list_unknown_identifiers(arg, extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         }
-        Expression::Assignment(_, rhs) => list_unknown_identifiers(rhs, extra_vars, constants, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
-        Expression::PartialDerivative(_, expr) => list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything),
+        Expression::Assignment(_, rhs) => list_unknown_identifiers(rhs, extra_vars, env, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
+        Expression::PartialDerivative(_, expr) => list_unknown_identifiers(expr, extra_vars, env, modified_identifiers, modified_anything),
         Expression::DirectionalDerivative(_, expr, point, direction) => {
-            list_unknown_identifiers(expr, extra_vars, constants, modified_identifiers, modified_anything)
-            || point.iter().map(|v| list_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
-            || direction.iter().map(|v| list_unknown_identifiers(v, extra_vars, constants, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            list_unknown_identifiers(expr, extra_vars, env, modified_identifiers, modified_anything)
+            || point.iter().map(|v| list_unknown_identifiers(v, extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
+            || direction.iter().map(|v| list_unknown_identifiers(v, extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
         },
         Expression::IfElse(x, y, z) => {
             // This will modify something iff at least either LHS or RHS is modified.
-            list_unknown_identifiers(x, extra_vars, constants, modified_identifiers, modified_anything)
-            || list_unknown_identifiers(y, extra_vars, constants, modified_identifiers, modified_anything)
-            || list_unknown_identifiers(z, extra_vars, constants, modified_identifiers, modified_anything)
+            list_unknown_identifiers(x, extra_vars, env, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(y, extra_vars, env, modified_identifiers, modified_anything)
+            || list_unknown_identifiers(z, extra_vars, env, modified_identifiers, modified_anything)
         }
     }
 }
@@ -177,8 +177,7 @@ fn list_unknown_identifiers(
 pub fn eval(
     expr: &Expression,
     extra_vars: &VarStack,
-    constants: &mut HashMap<String, Object>,
-    functions: &mut HashMap<String, FunctionRepr>
+    env: &mut Env
 ) -> Result<Object, String> {
     match expr {
         Expression::None => Err("Received empty expression.".to_string()),
@@ -188,7 +187,7 @@ pub fn eval(
                 Ok(x.clone())
             }
             // If nothing is found, look in `constants`.
-            else if let Some(x) = constants.get(ident) {
+            else if let Some(x) = env.constants.get(ident) {
                 Ok(x.clone())
                 // We only call 'clone' for every time a variable from 'constants' is used, which can only happen so often
                 // since the user still has to enter at least one character per time it is used. Therefore,
@@ -202,7 +201,7 @@ pub fn eval(
         Expression::Number(x) => Ok(Object::Float(*x)),
         Expression::Vector(entries) => {
             Ok(Object::Vector(math::Vector{values: entries.iter().map(
-                |x| match eval(x, extra_vars, constants, functions) {
+                |x| match eval(x, extra_vars, env) {
                     Ok(Object::Float(entry)) => Ok(entry),
                     Ok(_) => Err(format!("Entry {} is not a float.", x)),
                     Err(e) => Err(format!("Couldn't evaluate entry {}. Traceback: {}", x, e))
@@ -211,7 +210,7 @@ pub fn eval(
         },
         Expression::Matrix(m, n, entries) => {
             Ok(Object::Matrix(math::Matrix::from(*m, *n, entries.iter().map(
-                |x| match eval(x, extra_vars, constants, functions) {
+                |x| match eval(x, extra_vars, env) {
                     Ok(Object::Float(entry)) => Ok(entry),
                     Ok(_) => Err(format!("Entry {} is not a float.", x)),
                     Err(e) => Err(format!("Couldn't evaluate entry {}. Traceback: {}", x, e))
@@ -221,7 +220,7 @@ pub fn eval(
         Expression::UnaryOperation(op, rhs) => {
             match op {
                 UnaryOperation::Neg => {
-                    match eval(rhs, extra_vars, constants, functions)? {
+                    match eval(rhs, extra_vars, env)? {
                         Object::Success => Ok(Object::Success),
                         Object::Undefined => Err("Operation 'Neg' not valid for undefined operand.".to_string()),
                         Object::Float(x) => Ok(Object::Float(-x)),
@@ -231,7 +230,7 @@ pub fn eval(
                     }
                 }
                 UnaryOperation::Not => {
-                    match eval(rhs, extra_vars, constants, functions)? {
+                    match eval(rhs, extra_vars, env)? {
                         Object::Success => Ok(Object::Success),
                         Object::Undefined => Err("Operation 'Not' not valid for undefined operand.".to_string()),
                         Object::Float(x) => Ok(Object::Float(if x == 0.0 {1.0} else {0.0})),
@@ -241,7 +240,7 @@ pub fn eval(
                     }
                 }
                 UnaryOperation::Factorial => {
-                    match eval(rhs, extra_vars, constants, functions)? {
+                    match eval(rhs, extra_vars, env)? {
                         Object::Success => Ok(Object::Success),
                         Object::Float(x) => Ok(Object::Float({
                             let r = x.round();
@@ -257,7 +256,7 @@ pub fn eval(
                     }
                 }
                 UnaryOperation::Abs => {
-                    match eval(rhs, extra_vars, constants, functions)? {
+                    match eval(rhs, extra_vars, env)? {
                         Object::Success => Ok(Object::Success),
                         Object::Float(x) => Ok(Object::Float(x.abs())),
                         Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Abs, Box::new(e)))),
@@ -265,7 +264,7 @@ pub fn eval(
                     }
                 }
                 UnaryOperation::Norm(opt) => {
-                    match eval(rhs, extra_vars, constants, functions)? {
+                    match eval(rhs, extra_vars, env)? {
                         Object::Success => Ok(Object::Success),
                         Object::Float(x) => Ok(Object::Float(x.abs())),
                         Object::Vector(x) => {
@@ -275,7 +274,7 @@ pub fn eval(
                                 Expression::Identifier(ident) if ident == "inf" || ident == "infty"
                                     => math::matrices_and_vectors::VectorNorm::Sup,
                                 other => {
-                                    if let Object::Float(z) = eval(other, extra_vars, constants, functions)? {
+                                    if let Object::Float(z) = eval(other, extra_vars, env)? {
                                         math::matrices_and_vectors::VectorNorm::P(z)
                                     }
                                     else {return Err(format!("Couldn't evaluate {other} to float."))}
@@ -293,7 +292,7 @@ pub fn eval(
                                 Expression::Identifier(ident) if ident.starts_with('f')
                                     => math::matrices_and_vectors::MatrixNorm::Frobenius,
                                 other => {
-                                    if let Object::Float(z) = eval(other, extra_vars, constants, functions)? {
+                                    if let Object::Float(z) = eval(other, extra_vars, env)? {
                                         math::matrices_and_vectors::MatrixNorm::P(z)
                                     }
                                     else {return Err(format!("Couldn't evaluate {other} to float."))}
@@ -313,20 +312,20 @@ pub fn eval(
                 (a @ Expression::Function(..), b, BinaryOperation::Comp(_, param)) | (b, a @ Expression::Function(..), BinaryOperation::Comp(_, param)) => {
                     let this = a.clone(); let other = b.clone();
                     let mut free_variables = HashSet::<String>::new(); // This gathers all variables that will have to be randomized afterwards
-                    list_unknown_identifiers(&this, extra_vars, constants, &mut free_variables, false);
-                    let other_only_needs_single_eval = !list_unknown_identifiers(&other, extra_vars, constants, &mut free_variables, false);
+                    list_unknown_identifiers(&this, extra_vars, env, &mut free_variables, false);
+                    let other_only_needs_single_eval = !list_unknown_identifiers(&other, extra_vars, env, &mut free_variables, false);
                     let mut other_eval = Object::Success; // Placeholder
                     // If `other` doesn't contain any free variables (<=> the second `list_unknown_identifiers` call above actually modified the expression),
                     // it suffices to evaluate `other` once.
                     // Then, evaluating every time would be inefficient, especially if many values will be tested.
                     // Therefore, it makes sense to check whether this is the case beforehand, and if so, simply evaluate once and save the value for later.
                     if other_only_needs_single_eval {
-                        other_eval = eval(&other, extra_vars, constants, functions)?;
+                        other_eval = eval(&other, extra_vars, env)?;
                     }
 
                     // If a number of repetitions is given as `param` under the form of an expression, evaluate it and use it. Otherwise, use `DEFAULT_TESTEQ_REPETITIONS`
                     let repetitions = param.as_ref()
-                        .map(|p| match eval(p, extra_vars, constants, functions) {
+                        .map(|p| match eval(p, extra_vars, env) {
                             Ok(Object::Float(x)) => Ok(x.round() as i64),
                             Err(e) => Err(format!("Couldn't resolve number of repetitions `{}`. Traceback: {}", p, e)),
                             _ => Err(format!("Couldn't resolve number of repetitions `{}` to float.", p))
@@ -339,25 +338,25 @@ pub fn eval(
                         let random_numbers: Vec<Object> = (0..free_variables.len()).map(|_| Object::Float(rng.gen_range(-1000.0..1000.0))).collect();
                         let tmp_vars: HashMap<&String, &Object> = free_variables.iter().enumerate().map(|(i, ident)| (ident, &random_numbers[i])).collect();
                         let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
-                        let first_eval = eval(&this, &new_stack, constants, functions)
+                        let first_eval = eval(&this, &new_stack, env)
                             .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e)) // Add information to the error message
                             ?;
                         if !other_only_needs_single_eval {
-                            other_eval = eval(&other, &new_stack, constants, functions)
+                            other_eval = eval(&other, &new_stack, env)
                                 .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e))
                                 ?;
                         }
                         // If the objects' comparison yields `false`, return that. If the objects aren't comparable, return the appropriate error. Otherwise, continue.
                         match math::objects::try_operation(&first_eval, &other_eval, op) {
                             Ok(Object::Float(0.0)) => { return Ok(Object::Float(0.0)); }
-                            Err(_) => { return Err(format!("Couldn't compare `{}` and `{}` (arising from environment {:?}).", first_eval, other_eval, constants)); }
+                            Err(_) => { return Err(format!("Couldn't compare `{}` and `{}` (arising from environment {:?}).", first_eval, other_eval, env.constants)); }
                             _ => {}
                         }
                     }
                     Ok(Object::Float(1.0)) // If nothing previous returned, then the expressions fulfill the comparison.
                 }
                 // Otherwise...
-                _ => math::objects::try_operation(&eval(lhs, extra_vars, constants, functions)?, &eval(rhs, extra_vars, constants, functions)?, op)
+                _ => math::objects::try_operation(&eval(lhs, extra_vars, env)?, &eval(rhs, extra_vars, env)?, op)
             }
         },
         Expression::Function(function_name, given_arg_exprs) => {
@@ -381,16 +380,16 @@ pub fn eval(
                         return Err("___diff_num_{{...}} takes an even number of arguments.".to_string()); // See splitting of arguments below
                     }
                 } else { given_arg_exprs };
-                let rm = functions.remove(real_function_name);
+                let rm = env.functions.remove(real_function_name);
                 let res = match rm {
                     Some(FunctionRepr::Direct(ref f)) => {
                         // The given arguments should then have the format `point <concat> direction`, so we have to split the arguments
                         // into two parts (splitting in the middle of the array which we ensured has even size).
                         let point = (0..arg_exprs.len()/2)
-                            .map(|i| eval(&arg_exprs[i], extra_vars, constants, functions))
+                            .map(|i| eval(&arg_exprs[i], extra_vars, env))
                             .collect::<Result<Vec<_>, _>>()?;
                         let direction = (arg_exprs.len()/2..arg_exprs.len())
-                            .map(|i| eval(&arg_exprs[i], extra_vars, constants, functions))
+                            .map(|i| eval(&arg_exprs[i], extra_vars, env))
                             .collect::<Result<Vec<_>, _>>()?;
                         math::differentiation::numerical_directional_derivative(f, point, direction)
                     }
@@ -400,7 +399,7 @@ pub fn eval(
                     None => Err(format!("No such function: {:?}", function_name))
                 };
                 if let Some(x) = rm {
-                    functions.insert(real_function_name.to_string(), x);
+                    env.functions.insert(real_function_name.to_string(), x);
                 }
                 res
             }
@@ -409,9 +408,9 @@ pub fn eval(
             // This is necessary since `functions` can't be borrowed as mutable and immutable twice at the same time (caused by recursive call to `eval`).
             // By transfer of ownership, this is a very cheap operation compared to cloning a `FunctionRepr` because the latter's
             // defining expression (if present) can be highly nested.
-            else if let Some(func) = functions.remove(function_name) {
-                let ret_value = eval_function(function_name, &func, given_arg_exprs, extra_vars, constants, functions);
-                functions.insert(function_name.clone(), func); // Reinsert the removed function
+            else if let Some(func) = env.functions.remove(function_name) {
+                let ret_value = eval_function(function_name, &func, given_arg_exprs, extra_vars, env);
+                env.functions.insert(function_name.clone(), func); // Reinsert the removed function
                 ret_value
             }
             else {Err(format!("No such function: {:?}", function_name))}
@@ -426,8 +425,7 @@ pub fn eval(
                 function_name: &String,
                 unparsed_args: std::slice::Iter<'_, Expression>,
                 rhs: &Expression,
-                constants: &mut HashMap<String, Object>,
-                functions: &mut HashMap<String, FunctionRepr>
+                env: &mut Env
             ) -> Result<Object, String> {
                 if function_name.starts_with("___") { Err("Names starting with \"___\" are forbidden".to_string()) }
                 else if function_name == "D" || function_name.starts_with("D_") { Err("The name \"D\" and identifiers starting with \"D_\" are reserved for the total derivative.".to_string()) }
@@ -440,17 +438,17 @@ pub fn eval(
                         )
                         .collect::<Result<Vec<_>, _>>()?;
                     // Next, parse the RHS as explained in the documentation of `parse_function_definition`.
-                    let expr = parse_function_definition(rhs, &argnames, constants);
+                    let expr = parse_function_definition(rhs, &argnames, env);
                     // The argument names have to be prefixed too
                     argnames = argnames.into_iter().map(|x| format!("___tmp_{}", x)).collect();
-                    functions.insert(function_name.clone(), FunctionRepr::ByExpression(
+                    env.functions.insert(function_name.clone(), FunctionRepr::ByExpression(
                         argnames,
                         expr
                     ));
                     // The .clone() above is no problem since function definitions are rare (in the sense that performance doesn't matter for this).
                     // Lastly, if there was already a function `__diff_{function_name}` present in `functions` (cf. `analytic_derivative`).
                     // If so, it is now outdated, so remove it.
-                    functions.remove(&format!("___diff_num_{}", function_name));
+                    env.functions.remove(&format!("___diff_num_{}", function_name));
                     Ok(Object::Success)
                 }
             }
@@ -459,11 +457,11 @@ pub fn eval(
                     if ident.starts_with("___") { Err("Names starting with \"___\" are forbidden".to_string()) }
                     else if ident == "D" || ident.starts_with("D_") { Err("The name \"D\" and identifiers starting with \"D_\" are reserved for the total derivative.".to_string()) }
                     else {
-                        if let Ok(obj_rhs) = eval(rhs, extra_vars, constants, functions) {
+                        if let Ok(obj_rhs) = eval(rhs, extra_vars, env) {
                             // The '.clone()' in below line is due to the fact that we want to save the value on one hand (within 'constants')
                             // but also return it (e.g. the expression "x := 5" should not only define x as 5 but also return the value 5 so that
                             // one can write "... * (x := ...)" to save intermediate results).
-                            constants.insert(ident.clone(), obj_rhs.clone());
+                            env.constants.insert(ident.clone(), obj_rhs.clone());
                             Ok(obj_rhs)
                         }
                         else { Err(format!("Couldn't evaluate expression {}", **rhs)) }
@@ -472,38 +470,38 @@ pub fn eval(
                 Expression::BinaryOperation(x, BinaryOperation::Mul, y) => {
                     match (&**x, &**y) {
                         (Expression::Identifier(function_name), Expression::Identifier(_))
-                            => define_function(function_name, std::slice::from_ref(&**y).iter(), rhs, constants, functions),
+                            => define_function(function_name, std::slice::from_ref(&**y).iter(), rhs, env),
                         (Expression::Identifier(function_name), Expression::Vector(args))
-                            => define_function(function_name, args.iter(), rhs, constants, functions),
+                            => define_function(function_name, args.iter(), rhs, env),
                         _ => Err(format!("Invalid LHS of assignment expression: {}", **lhs))
                     }
                 }
                 Expression::Function(function_name, unparsed_args)
-                    => define_function(function_name, unparsed_args.iter(), rhs, constants, functions),
+                    => define_function(function_name, unparsed_args.iter(), rhs, env),
                 _ => {
                     Err(format!("Invalid LHS of assignment expression: {}", **lhs))
                 }
             }
         }
         Expression::PartialDerivative(wrt, expr) => {
-            math::differentiation::analytic_partial_derivative(expr, wrt, functions).map(Object::LiteralExpression)
+            math::differentiation::analytic_partial_derivative(expr, wrt, env).map(Object::LiteralExpression)
         }
         Expression::DirectionalDerivative(vars, expr, point_exprs, direction_exprs) => {
             if point_exprs.len() != direction_exprs.len() {
                 return Err("Point and direction of directional derivative must have the same dimension.".to_string());
             }
             let point = point_exprs.iter()
-                .map(|p| eval(p, extra_vars, constants, functions))
+                .map(|p| eval(p, extra_vars, env))
                 .collect::<Result<Vec<_>, _>>()?;
             let direction = direction_exprs.iter()
-                .map(|p| eval(p, extra_vars, constants, functions))
+                .map(|p| eval(p, extra_vars, env))
                 .collect::<Result<Vec<_>, _>>()?;
-            math::differentiation::analytic_directional_derivative(vars, expr, &point, &direction, constants, functions)
+            math::differentiation::analytic_directional_derivative(vars, expr, &point, &direction, env)
         }
         Expression::IfElse(condition, iftrue, iffalse) => {
-            match eval(condition, extra_vars, constants, functions) {
-                Ok(Object::Float(1.0)) => eval(iftrue, extra_vars, constants, functions),
-                Ok(Object::Float(0.0)) => eval(iffalse, extra_vars, constants, functions),
+            match eval(condition, extra_vars, env) {
+                Ok(Object::Float(1.0)) => eval(iftrue, extra_vars, env),
+                Ok(Object::Float(0.0)) => eval(iffalse, extra_vars, env),
                 Ok(x) => Err(format!("Couldn't evaluate condition {} to 0 or 1; got {x}", &**condition)),
                 other => other
             }
@@ -516,8 +514,7 @@ fn eval_function(
     func: &FunctionRepr,
     given_arg_exprs: &[Expression],
     extra_vars: &VarStack,
-    constants: &mut HashMap<String, Object>,
-    functions: &mut HashMap<String, FunctionRepr>
+    env: &mut Env
 ) -> Result<Object, String> {
     match func {
         FunctionRepr::ByExpression(ref argnames, ref defining_expr) => {
@@ -527,17 +524,17 @@ fn eval_function(
             // Put all temporary variables (arguments) into a new hashmap and add it to `extra_vars`.
             let tmp_var_evals = given_arg_exprs.iter().enumerate().map(
                 |(i, given_arg_expr)| {
-                    eval(given_arg_expr, extra_vars, constants, functions)
+                    eval(given_arg_expr, extra_vars, env)
                     .map_err(|e| format!("Couldn't resolve argument {} := {}. Traceback: {}", argnames[i], given_arg_expr, e))
                 }
             ).collect::<Result<Vec<_>, _>>()?;
             let tmp_vars: HashMap<&String, &Object> = tmp_var_evals.iter().enumerate().map(|(i, x)| (&argnames[i], x)).collect();
             let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
-            eval(defining_expr, &new_stack, constants, functions)
+            eval(defining_expr, &new_stack, env)
         }
         FunctionRepr::Direct(ref f) => {
             (*f)(&given_arg_exprs.iter()
-                .map(|arg_expr| eval(arg_expr, extra_vars, constants, functions))
+                .map(|arg_expr| eval(arg_expr, extra_vars, env))
                 .collect::<Result<Vec<_>, _>>()?)
         }
     }

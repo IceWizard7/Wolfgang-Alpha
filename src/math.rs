@@ -15,6 +15,7 @@ pub mod expressions;
 pub mod matrices_and_vectors;
 pub mod objects;
 pub mod operations;
+pub mod optimization;
 pub mod utils;
 
 pub use crate::math::expressions::Expression;

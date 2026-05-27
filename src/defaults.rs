@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::f64::consts;
 use crate::math::Expression;
 use crate::math::expressions;
-use crate::math::{Object, FunctionRepr};
+use crate::math::{Vector, Object, FunctionRepr};
 use crate::math::operations::{UnaryOperation, BinaryOperation};
 use crate::{expr_if_else, expr_and, expr_compare, expr_sub, expr_mul, expr_div, expr_square, expr_neg, expr_1arg_func};
 
@@ -42,6 +42,29 @@ macro_rules! float_1_function {
     };
 }
 
+/// Takes a function name `name` (e.g. `log`), a number `n` and an expression `expr`. Returns the tuple consisting of
+/// 1. Stringified name of the function
+/// 2. `FunctionRepr::Direct`: expect exactly `n` arguments; if so, return `expr(args)`, otherwise, the appropriate `Err`.
+macro_rules! expect_n_args {
+    ($name:ident, $n:expr, $e:expr) => {
+        (
+            stringify!($name).to_string(),
+            FunctionRepr::Direct(Box::new(|args| {
+                if args.len() != 1 {
+                    Err(format!(
+                        "Wrong number of arguments provided for function '{}' (expected {}, got {}).",
+                        stringify!($name),
+                        $n,
+                        args.len()
+                    ))
+                } else {
+                    $e(args)
+                }
+            })),
+        )
+    };
+}
+
 pub const DEFAULT_FUNCTION_NAMES: [&str; 16] = [
     "exp", "ln", "log",
     "sqrt",
@@ -55,22 +78,29 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
     HashMap::<String, FunctionRepr>::from([
         float_1_function!(exp),
         float_1_function!(ln),
-        ("log".to_string(), FunctionRepr::Direct(Box::new(|args| {
-            if args.len() != 2 { Err(format!("Wrong number of arguments provided for function 'log' (expected 2 [value, base], got {}).", args.len())) }
-            else {
-                if let Object::Float(base) = args[1] {
-                    match args[0] {
-                        Object::Float(x) => Ok(Object::Float(x.log(base))),
-                        _ => Err("Wrong type for first argument (value) of function 'log' (expected float).".to_string())
-                    }
+        expect_n_args!(log, 2, |args: &[Object]| {
+            if let Object::Float(base) = args[1] {
+                match args[0] {
+                    Object::Float(x) => Ok(Object::Float(x.log(base))),
+                    _ => Err("Wrong type for first argument (value) of function 'log' (expected float).".to_string())
                 }
-                else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
             }
-        }))),
+            else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
+        }),
         float_1_function!(sqrt),
         float_1_function!(cos), float_1_function!(cosh), float_1_function!(acos), float_1_function!(acosh),
         float_1_function!(sin), float_1_function!(sinh), float_1_function!(asin), float_1_function!(asinh),
         float_1_function!(tan), float_1_function!(tanh), float_1_function!(atan), float_1_function!(atanh),
+        expect_n_args!(eig, 1, |args: &[Object]| {
+            if let Object::Matrix(mat) = &args[0] {
+                match mat.qr_decomposition() {
+                    Some((eig, ..)) => Ok(Object::Vector(Vector{values: eig})),
+                    None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
+                }
+                
+            }
+            else { Err("Wrong type for argument of function 'eig' (expected Matrix).".to_string()) }
+        }),
     ])
 }
 

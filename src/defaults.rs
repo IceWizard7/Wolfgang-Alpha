@@ -106,12 +106,13 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
     ])
 }
 
-pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 16] = [
+pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 17] = [
     "exp", "ln", "log",
     "sqrt",
     "cos", "cosh", "acos", "acosh",
     "sin", "sinh", "asin", "asinh",
-    "tan", "tanh", "atan", "atanh"
+    "tan", "tanh", "atan", "atanh",
+    "det"
 ];
 
 /// Example: (exp, point) => Ok(Expression::Function("exp", point[0].clone())) if point has length 1 otherwise Err

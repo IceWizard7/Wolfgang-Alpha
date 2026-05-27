@@ -147,7 +147,7 @@ pub fn analytic_partial_derivative(
                 }
                 Some(FunctionRepr::Direct(_)) => {
                     // If `function_name` refers to a default function (e.g. `exp`), we can spare ourselves the below code.
-                    if defaults::DEFAULT_FUNCTION_NAMES.contains(&function_name.as_str()) {
+                    if defaults::FUNCTIONS_WITH_PROVIDED_DERIVATIVE.contains(&function_name.as_str()) {
                         // Similar to the chain rule block in `analytic_directional_derivative`, with a little change: with the same f, g as there, we have
                         //     D(f \circ g)(x)[1.0] = Df(g(x))[Dg(x)[1.0]]
                         let differentiated_components_of_g = g_exprs.iter().map(

@@ -173,9 +173,9 @@ pub fn try_operation(lhs: &Object, rhs: &Object, op: &BinaryOperation) -> Result
                         BinaryOperation::Sub => x-y,
                         BinaryOperation::Mul => x*y,
                         BinaryOperation::Div => x/y,
-                        BinaryOperation::Rem => x%y,
+                        BinaryOperation::Rem => x.rem_euclid(*y),
                         // The following result should in fact already be an integer, the `.round()` only converts it to int while accounting for small errors.
-                        BinaryOperation::Quo => ((x - (x % y)) / y).round(),
+                        BinaryOperation::Quo => ((x - (x.rem_euclid(*y))) / y).round(),
                         BinaryOperation::Pow => x.powf(*y),
                         BinaryOperation::Comp(comp, _) => compare(x, y, comp) as i8 as f64,
                         BinaryOperation::Or => if *x != 0.0 || *y != 0.0 {1.0} else {0.0},

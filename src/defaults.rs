@@ -128,13 +128,13 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
     ])
 }
 
-pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 17] = [
+pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 18] = [
     "exp", "ln", "log",
     "sqrt",
     "cos", "cosh", "acos", "acosh",
     "sin", "sinh", "asin", "asinh",
     "tan", "tanh", "atan", "atanh",
-    "det"
+    "det", "tr"
 ];
 
 /// Example: (exp, point) => Ok(Expression::Function("exp", point[0].clone())) if point has length 1 otherwise Err
@@ -290,6 +290,11 @@ pub fn get_default_derivative(function_name: &str, point: &[Expression], directi
                 apply_to_first_arg!(adj, point, direction)?,
                 direction[0].clone()
             )
+        )),
+        // `tr` is linear and thus commutes with the derivative.
+        "tr" => Ok(expr_1arg_func!(
+            "tr",
+            direction[0].clone()
         )),
         _ => Err(format!("No derivative provided for '{function_name}'."))
     }

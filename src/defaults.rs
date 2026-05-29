@@ -103,6 +103,16 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
             }
             else { Err("Wrong type for argument of function 'det' (expected Matrix).".to_string()) }
         }),
+        expect_n_args!(adj, 1, |args: &[Object]| {
+            if let Object::Matrix(mat) = &args[0] {
+                match mat.adj() {
+                    Some(m) => Ok(Object::Matrix(m)),
+                    None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
+                }
+                
+            }
+            else { Err("Wrong type for argument of function 'adj' (expected Matrix).".to_string()) }
+        }),
     ])
 }
 

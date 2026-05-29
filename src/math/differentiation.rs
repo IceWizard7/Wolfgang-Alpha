@@ -185,7 +185,6 @@ fn analytic_partial_derivative_for_function(
             }
             else {
                 // Otherwise, the idea is to resolve Dg(x)[1] and then return an `Expression::DirectionalDerivative`.
-                // TODO: improve this by adding a function that computes the directional derivative expression with a variable point
                 let direction = g_exprs.iter()
                     .map(|g_i| analytic_partial_derivative(g_i, wrt, extra_vars, env))
                     .collect::<Result<Vec<_>, _>>()?;

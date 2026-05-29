@@ -906,7 +906,7 @@ impl Matrix {
     }
 
     /// Returns the sum of all diagonal entries of `self`.
-    fn tr(&self) -> f64 {
+    pub fn tr(&self) -> f64 {
         (0..self.m).map(|i| self.get(i, i)).sum()
     }
 

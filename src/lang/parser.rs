@@ -281,7 +281,7 @@ impl Parser {
             }
         }
         loop {
-            let (op, prec, consume) = match self.peek() {
+            let (mut op, prec, consume) = match self.peek() {
                 Token::Plus => (BinaryOperation::Add, 5, true),
                 Token::Minus => (BinaryOperation::Sub, 5, true),
                 Token::Asterisk => (BinaryOperation::Mul, 6, true),
@@ -293,19 +293,8 @@ impl Parser {
                 Token::Percent => (BinaryOperation::Rem, 6, true),
                 Token::Circumflex => (BinaryOperation::Pow, 7, true),
                 Token::Assign => (BinaryOperation::Add, 0, true), // We don't need any operation here, so 'Add' is just a placeholder to simplify notation
-                Token::Comparison(..) => {
-                    // Slightly longer code here because we have to consume the token right now in order to avoid copying
-                    if let Token::Comparison(c, param) = self.next() { // Will always succeed
-                        let parsed_param = if let Some(p) = param {
-                            // `unwrap` in the following line is acceptable since the `map` at the beginning ensures that `param` is `Some`
-                            Some(Box::new(Parser{tokens: p, pos: 0}.parse(env)?.into_iter().next().unwrap()))
-                        } else {None};
-                        (BinaryOperation::Comp(c, parsed_param), 4, false) // `false` since the token was already consumed
-                    }
-                    else { // Will never happen anyway
-                        (BinaryOperation::Add, 0, false)
-                    }
-                },
+                // Importantly, we only fetch the comparison's optional parameter later, when we actually consume the operator (avoids cloning).
+                Token::Comparison(c, _) => (BinaryOperation::Comp(*c, None), 4, true),
                 Token::DoublePipe => (BinaryOperation::Or, 1, true),
                 Token::DoubleAmpersand => (BinaryOperation::And, 2, true),
 
@@ -327,7 +316,15 @@ impl Parser {
             if prec < min_precedence {
                 break;
             }
-            if consume { self.next(); } // Implicit operators, e.g. left parentheses interpreted as "*(", do not lead to the consumption of the next token.
+            if consume { // Implicit operators, e.g. left parentheses interpreted as "*(", do not lead to the consumption of the next token.
+                if let Token::Comparison(c, param) = self.next() { // As mentioned above, fetch the missing comparison parameter (if there is one)
+                    let parsed_param = if let Some(p) = param {
+                        // `unwrap` in the following line is acceptable since the `map` at the beginning ensures that `param` is `Some`
+                        Some(Box::new(Parser{tokens: p, pos: 0}.parse(env)?.into_iter().next().unwrap()))
+                    } else {None};
+                    op = BinaryOperation::Comp(c, parsed_param)
+                }
+            }
 
             // The RHS can only contain operators of strictly larger precedence, so we parse it with parameter 'prec+1'.
             let rhs = self.parse_expression(prec + 1, None, env)?;
@@ -351,7 +348,7 @@ impl Parser {
                     => Expression::PartialDerivative(ident[1..].to_string(), Box::new(self.parse_expression(8, None, env)?)),
                 // Default
                 (lhs, ..) => Expression::BinaryOperation(Box::new(lhs), op, Box::new(rhs))
-            }
+            };
         }
 
         Ok(lhs)

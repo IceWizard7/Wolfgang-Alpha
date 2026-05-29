@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use dioxus_logger::tracing;
 use rand::Rng;
 use statrs::function::gamma;
 
@@ -291,13 +292,25 @@ pub fn eval(
             }
         },
         Expression::BinaryOperation(lhs, op, rhs) => {
-            match (&**lhs, &**rhs, op) {
-                // If the operation is a comparison and at least one of `lhs`, `rhs` is `Expression::Function` (which we'll call `this`; we'll call the remaining one `other`)...
-                (a @ Expression::Function(..), b, BinaryOperation::Comp(_, param)) | (b, a @ Expression::Function(..), BinaryOperation::Comp(_, param)) => {
-                    let this = a.clone(); let other = b.clone();
-                    let mut free_variables = HashSet::<String>::new(); // This gathers all variables that will have to be randomized afterwards
-                    list_unknown_identifiers(&this, extra_vars, env, &mut free_variables, false);
-                    let other_only_needs_single_eval = !list_unknown_identifiers(&other, extra_vars, env, &mut free_variables, false);
+            // First, collect all unknown variables if there are any
+            let mut lhs_free_variables = HashSet::<String>::new();
+            list_unknown_identifiers(lhs, extra_vars, env, &mut lhs_free_variables, false);
+            let mut rhs_free_variables = HashSet::<String>::new();
+            list_unknown_identifiers(rhs, extra_vars, env, &mut rhs_free_variables, false);
+            tracing::info!("Evaluating {} {} {}", &**lhs, op, &**rhs);
+            tracing::info!("LHS free variables: {:?}", lhs_free_variables);
+            tracing::info!("RHS free variables: {:?}", rhs_free_variables);
+            // I do conceed the following is messy.
+            // Check if the operation is a comparison and at least one of `lhs`, `rhs` is a function (which we'll call `this`; we'll call the remaining one `other`).
+            // Here, being a function means having unknown identifiers within.
+            match if let BinaryOperation::Comp(_, param) = op {
+                if !lhs_free_variables.is_empty() {Some((*lhs.clone(), *rhs.clone(), param))}
+                else if !rhs_free_variables.is_empty() {Some((*rhs.clone(), *lhs.clone(), param))}
+                else {None}
+            } else {None} {
+                Some((this, other, param)) => {
+                    let other_only_needs_single_eval = rhs_free_variables.is_empty();
+                    lhs_free_variables.extend(rhs_free_variables);
                     let mut other_eval = Object::Success; // Placeholder
                     // If `other` doesn't contain any free variables (<=> the second `list_unknown_identifiers` call above actually modified the expression),
                     // it suffices to evaluate `other` once.
@@ -319,8 +332,8 @@ pub fn eval(
 
                     let mut rng = rand::thread_rng();
                     for _ in 0..repetitions {
-                        let random_numbers: Vec<Object> = (0..free_variables.len()).map(|_| Object::Float(rng.gen_range(-1000.0..1000.0))).collect();
-                        let tmp_vars: HashMap<&String, &Object> = free_variables.iter().enumerate().map(|(i, ident)| (ident, &random_numbers[i])).collect();
+                        let random_numbers: Vec<Object> = (0..lhs_free_variables.len()).map(|_| Object::Float(rng.gen_range(-1000.0..1000.0))).collect();
+                        let tmp_vars: HashMap<&String, &Object> = lhs_free_variables.iter().enumerate().map(|(i, ident)| (ident, &random_numbers[i])).collect();
                         let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
                         let first_eval = eval(&this, &new_stack, env)
                             .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e)) // Add information to the error message
@@ -339,9 +352,62 @@ pub fn eval(
                     }
                     Ok(Object::Float(1.0)) // If nothing previous returned, then the expressions fulfill the comparison.
                 }
-                // Otherwise...
-                _ => math::objects::try_operation(&eval(lhs, extra_vars, env)?, &eval(rhs, extra_vars, env)?, op)
+                None => math::objects::try_operation(&eval(lhs, extra_vars, env)?, &eval(rhs, extra_vars, env)?, op)
             }
+            // match (&**lhs, &**rhs, op) {
+            //     // If the operation is a comparison and at least one of `lhs`, `rhs` is a function (which we'll call `this`; we'll call the remaining one `other`)...
+            //     // (Note: being a function means having unknown identifiers within.)
+            //     (a, b, BinaryOperation::Comp(_, param))
+            //     | (b, a, BinaryOperation::Comp(_, param))
+            //     if  => {
+            //         let this = a.clone(); let other = b.clone();
+                    
+            //         list_unknown_identifiers(&this, extra_vars, env, &mut free_variables, false);
+            //         let other_only_needs_single_eval = !list_unknown_identifiers(&other, extra_vars, env, &mut free_variables, false);
+            //         let mut other_eval = Object::Success; // Placeholder
+            //         // If `other` doesn't contain any free variables (<=> the second `list_unknown_identifiers` call above actually modified the expression),
+            //         // it suffices to evaluate `other` once.
+            //         // Then, evaluating every time would be inefficient, especially if many values will be tested.
+            //         // Therefore, it makes sense to check whether this is the case beforehand, and if so, simply evaluate once and save the value for later.
+            //         if other_only_needs_single_eval {
+            //             other_eval = eval(&other, extra_vars, env)?;
+            //         }
+
+            //         // If a number of repetitions is given as `param` under the form of an expression, evaluate it and use it. Otherwise, use `DEFAULT_TESTEQ_REPETITIONS`
+            //         let repetitions = param.as_ref()
+            //             .map(|p| match eval(p, extra_vars, env) {
+            //                 Ok(Object::Float(x)) => Ok(x.round() as i64),
+            //                 Err(e) => Err(format!("Couldn't resolve number of repetitions `{}`. Traceback: {}", p, e)),
+            //                 _ => Err(format!("Couldn't resolve number of repetitions `{}` to float.", p))
+            //             })
+            //             .unwrap_or(Ok(DEFAULT_TESTEQ_REPETITIONS))
+            //             ?;
+
+            //         let mut rng = rand::thread_rng();
+            //         for _ in 0..repetitions {
+            //             let random_numbers: Vec<Object> = (0..free_variables.len()).map(|_| Object::Float(rng.gen_range(-1000.0..1000.0))).collect();
+            //             let tmp_vars: HashMap<&String, &Object> = free_variables.iter().enumerate().map(|(i, ident)| (ident, &random_numbers[i])).collect();
+            //             let new_stack = VarStack::Frame { vars: &tmp_vars, parent: extra_vars };
+            //             let first_eval = eval(&this, &new_stack, env)
+            //                 .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e)) // Add information to the error message
+            //                 ?;
+            //             if !other_only_needs_single_eval {
+            //                 other_eval = eval(&other, &new_stack, env)
+            //                     .map_err(|e| format!("Couldn't evaluate `{}` with environment {:?}. Traceback: {}", this, tmp_vars, e))
+            //                     ?;
+            //             }
+            //             // If the objects' comparison yields `false`, return that. If the objects aren't comparable, return the appropriate error. Otherwise, continue.
+            //             match math::objects::try_operation(&first_eval, &other_eval, op) {
+            //                 Ok(Object::Float(0.0)) => { return Ok(Object::Float(0.0)); }
+            //                 Err(_) => { return Err(format!("Couldn't compare `{}` and `{}` (arising from environment {:?}).", first_eval, other_eval, env.constants)); }
+            //                 _ => {}
+            //             }
+            //         }
+            //         Ok(Object::Float(1.0)) // If nothing previous returned, then the expressions fulfill the comparison.
+            //     }
+            //     // Otherwise...
+            //     _ => math::objects::try_operation(&eval(lhs, extra_vars, env)?, &eval(rhs, extra_vars, env)?, op)
+            // }
         },
         Expression::Function(function_name, given_arg_exprs) => {
             // Note this case can only occur when we actually have a function call, not an assignment.

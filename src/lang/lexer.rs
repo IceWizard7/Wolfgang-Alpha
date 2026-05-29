@@ -79,7 +79,8 @@ fn char_peek_equals(chars: &mut Peekable<Chars>, ch: char, consume_if_true: bool
 /// If it exists, returns the parameter between brackets in tokenized form. Otherwise, returns `None`.
 fn parse_comparison_parameter(chars: &mut Peekable<Chars>) -> Result<Option<Vec<Token>>, String> {
     if char_peek_equals(chars, '{', true) {
-        let toks = tokenize_recursive(chars, vec!['}']);
+        let mut toks = tokenize_recursive(chars, vec!['}']);
+        if let Ok(t) = toks.as_mut() {t.push(Token::EOF);}
         chars.next(); // Consume right bracket
         toks.map(Some)
     }

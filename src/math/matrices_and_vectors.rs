@@ -900,9 +900,14 @@ impl Matrix {
         adj
     }
 
-    /// Returns the product of all diagonal entries of the matrix.
+    /// Returns the product of all diagonal entries of `self`.
     fn diag_product(&self) -> f64 {
         (0..self.m).fold(1.0, |acc, i| acc * self.get(i, i))
+    }
+
+    /// Returns the sum of all diagonal entries of `self`.
+    fn tr(&self) -> f64 {
+        (0..self.m).map(|i| self.get(i, i)).sum()
     }
 
     /// Returns the determinant of `self` via an LU-decomposition.

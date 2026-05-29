@@ -167,7 +167,7 @@ impl ops::Rem<f64> for &Vector {
     type Output = Vector;
     fn rem(self, rhs: f64) -> Self::Output {
         Vector {
-            values: self.values.iter().map(|x| x % rhs).collect::<Vec<f64>>()
+            values: self.values.iter().map(|x| x.rem_euclid(rhs)).collect::<Vec<f64>>()
         }
     }
 }
@@ -175,14 +175,14 @@ impl<'a> ops::Rem<&'a Vector> for f64 {
     type Output = Vector;
     fn rem(self, rhs: &'a Vector) -> Self::Output {
         Vector {
-            values: rhs.values.iter().map(|x| self % x).collect::<Vec<f64>>()
+            values: rhs.values.iter().map(|x| self.rem_euclid(*x)).collect::<Vec<f64>>()
         }
     }
 }
 impl ops::RemAssign<f64> for Vector {
     fn rem_assign(&mut self, rhs: f64) {
         for i in 0..self.values.len() {
-            self.values[i] %= rhs;
+            self.values[i] = self.values[i].rem_euclid(rhs);
         }
     }
 }
@@ -334,7 +334,7 @@ impl ops::Rem<f64> for &Matrix {
         Matrix {
             m: self.m,
             n: self.n,
-            values: self.values.iter().map(|x| x % rhs).collect()
+            values: self.values.iter().map(|x| x.rem_euclid(rhs)).collect()
         }
     }
 }
@@ -344,14 +344,14 @@ impl<'a> ops::Rem<&'a Matrix> for f64 {
         Matrix {
             m: rhs.m,
             n: rhs.n,
-            values: rhs.values.iter().map(|x| self % x).collect()
+            values: rhs.values.iter().map(|x| self.rem_euclid(*x)).collect()
         }
     }
 }
 impl ops::RemAssign<f64> for Matrix {
     fn rem_assign(&mut self, rhs: f64) {
         for i in 0..self.values.len() {
-            self.values[i] %= rhs;
+            self.values[i] = self.values[i].rem_euclid(rhs);
         }
     }
 }
@@ -366,7 +366,7 @@ impl ops::Neg for &Matrix {
     }
 }
 
-/// Multiplication of vectors is treated as the euclidian inner product (i.e. v * v := v^\top * v).
+/// Multiplication of vectors is treated as the euclidian inner product (i.e. v * v := v^t * v).
 /// This makes it more convenient to obtain the inner product.
 /// 
 /// Returns None in case the dimensions mismatch.
@@ -540,6 +540,30 @@ impl Matrix {
         Matrix{m, n, values}
     }
 
+    pub fn identity(n: usize) -> Matrix {
+        if n == 0 {return Matrix{m: 0, n: 0, values: Vec::<f64>::new()};}
+        let mut values = Vec::<f64>::with_capacity(n*n);
+        values.push(1.0);
+        for _ in 0..n-1 {
+            values.extend(std::iter::repeat_n(0.0, n));
+            values.push(1.0);
+        }
+        Matrix{m: n, n, values}
+    }
+
+    /// Constructs a diagonal matrix with diagonal entries `diag_values`.
+    pub fn diag(diag_values: &[f64]) -> Matrix {
+        let n = diag_values.len();
+        if n == 0 {return Matrix{m: 0, n: 0, values: Vec::<f64>::new()};}
+        let mut values = Vec::<f64>::with_capacity(n * n);
+        values.push(diag_values[0]);
+        for v in diag_values.iter().skip(1) {
+            values.extend(std::iter::repeat_n(0.0, n));
+            values.push(*v);
+        }
+        Matrix{m: n, n, values}
+    }
+
     /// Replaces every component `x` of the matrix by `f(x)`.
     pub fn transform<F>(&mut self, f: F) where F: Fn(f64) -> f64 {
         for x in self.values.iter_mut() {
@@ -578,7 +602,8 @@ impl Matrix {
 
         Matrix { m: self.n, n: self.m, values }
     }
-    /// Multiplies `self` with `rhs^\top`. Returns `None` if the dimensions don't match.
+
+    /// Multiplies `self` with `rhs^t`. Returns `None` if the dimensions don't match.
     pub fn mul_with_transposed(self, rhs: &Matrix) -> Option<Matrix> {
         if self.n != rhs.n {
             None
@@ -604,46 +629,275 @@ impl Matrix {
         }
     }
 
-    pub fn identity(n: usize) -> Matrix {
-        if n == 0 {return Matrix{m: 0, n: 0, values: Vec::<f64>::new()};}
-        let mut values = Vec::<f64>::with_capacity(n*n);
-        values.push(1.0);
-        for _ in 0..n-1 {
-            values.extend(std::iter::repeat_n(0.0, n));
-            values.push(1.0);
+    /// Applies the given permutation to the rows of `self`.
+    /// 
+    /// `permutation` should be a permutation of the vector `[0, ..., n-1]` for some `n`.
+    /// Effectively, the row `i` of the new matrix will be the row `permutation[i]` of `self`.
+    pub fn permute_rows(&self, permutation: &[usize]) -> Matrix {
+        let mut values = Vec::<f64>::with_capacity(self.values.len());
+        for p in permutation {
+            values.extend(&self.values[p * self.n .. (p + 1) * self.n]);
         }
-        Matrix{m: n, n, values}
+        Matrix { m: self.m, n: self.n, values }
+    }
+    /// Applies the given permutation to columns of `self`.
+    /// 
+    /// `permutation` should be a permutation of the vector `[0, ..., n-1]` for some `n`.
+    /// Effectively, the column `i` of the new matrix will be the column `permutation[i]` of `self`.
+    pub fn permute_columns(&self, permutation: &[usize]) -> Matrix {
+        // To avoid cache thrashing (inevitable in a naive implementation), we first transpose `self`,
+        // apply the permutation as row permutation to it, and finally transpose back.
+        // Mathematically, this works because A*P = (P^t * A^t)^t.
+        let self_t = self.transpose();
+        let mut values = Vec::<f64>::with_capacity(self_t.values.len());
+        for p in permutation {
+            values.extend(&self_t.values[p * self_t.n .. (p + 1) * self_t.n]);
+        }
+        Matrix { m: self_t.m, n: self_t.n, values }.transpose()
     }
 
-    /// Standard algorithm to compute the LU decomposition.
+    /// Computes the LU decomposition of `self`.
+    /// 
     /// Time complexity: 2/3 * n^3 + O(n^2)
     pub fn lu_decomposition(&self) -> Option<(Matrix, Matrix)> {
         // First, ensure the matrix is square.
-        if self.m != self.n {
-            None
-        }
-        else {
-            let mut l = vec![0.0; self.m * self.m];
-            let mut u = Vec::<f64>::with_capacity(self.m * self.m);
-            for i in 0..self.m {
-                u.extend(std::iter::repeat_n(0.0, i));
-                for k in i..self.m {
-                    let newval = if i > 0 {
-                        self.get(i, k) - (0..i).map(|j| l[i*self.m + j] * u[j * self.m + k]).sum::<f64>()
-                    } else { self.get(i, k) };
-                    u.push(newval); // Can't condense into single line because of ownership of u
+        if self.m != self.n { return None; }
+        let mut l = vec![0.0; self.m * self.m];
+        let mut u = Vec::<f64>::with_capacity(self.m * self.m);
+        for i in 0..self.m {
+            u.extend(std::iter::repeat_n(0.0, i));
+            for k in i..self.m {
+                let newval = if i > 0 {
+                    self.get(i, k) - (0..i).map(|j| l[i*self.m + j] * u[j * self.m + k]).sum::<f64>()
+                } else { self.get(i, k) };
+                u.push(newval); // Can't condense into single line because of ownership of u
+            }
+            for k in i..self.m {
+                if utils::approx_eq(&u[i*self.m + i], &0.0) {
+                    return None; // No LU decomposition
                 }
-                for k in i..self.m {
-                    if utils::approx_eq(&u[i*self.m + i], &0.0) {
-                        return None; // No LU decomposition
+                l[k*self.m + i] = (if i > 0 {
+                    self.get(k, i) - (0..i).map(|j| l[k*self.m + j] * u[j*self.m + i]).sum::<f64>()
+                } else { self.get(k, i) }) / u[i*self.m + i];
+            }
+        }
+        Some((Matrix{m: self.m, n: self.m, values: l}, Matrix{m: self.m, n: self.m, values: u}))
+    }
+
+    /// Computes the full-pivot LU decomposition of `self`.
+    ///
+    /// Returns `Some((L, U, p, q))` such that `P * self * Q = L * U`, where
+    /// `P` and `Q` are the permutation matrices encoded by the index vectors
+    /// `p` and `q` (i.e. `P[i][p[i]] = 1` and `Q[q[j]][j] = 1`).
+    ///
+    /// Returns `None` if the matrix is not square. Notice that the full-pivot LU decomposition exists for any square matrix.
+    pub fn lu_decomposition_full_pivot(&self) -> Option<(Matrix, Matrix, Vec<usize>, Vec<usize>)> {
+        if self.m != self.n { return None; }
+        let n = self.m;
+        let mut a = self.clone(); // Working copy of `self` we modify in place
+        let mut l = Matrix::identity(n);
+        let mut u = Matrix::zeros(n, n);
+        let mut p: Vec<usize> = (0..n).collect();
+        let mut q: Vec<usize> = (0..n).collect();
+
+        for i in 0..n {
+            // Find the pivot, i.e. the `r, c` corresponding to the largest `|a[r][c]|` in the trailing submatrix
+            let mut max_abs = 0.0f64;
+            let mut pivot_row = i;
+            let mut pivot_col = i;
+            for r in i..n {
+                for c in i..n {
+                    let v = a.get(r, c).abs();
+                    if v > max_abs {
+                        max_abs = v;
+                        pivot_row = r;
+                        pivot_col = c;
                     }
-                    l[k*self.m + i] = (if i > 0 {
-                        self.get(k, i) - (0..i).map(|j| l[k*self.m + j] * u[j*self.m + i]).sum::<f64>()
-                    } else { self.get(k, i) }) / u[i*self.m + i];
                 }
             }
-            Some((Matrix{m: self.m, n: self.m, values: l}, Matrix{m: self.m, n: self.m, values: u}))
+            if max_abs == 0.0 {
+                break; // Remaining submatrix is zero; decomposition is complete
+            }
+
+            // Bring the pivot row up to row `i` both in `a` and in `l` (for `l`, we only treat already-filled columns)
+            if pivot_row != i {
+                for c in 0..n {
+                    a.values.swap(i * n + c, pivot_row * n + c);
+                }
+                for c in 0..i {
+                    l.values.swap(i * n + c, pivot_row * n + c);
+                }
+                p.swap(i, pivot_row);
+            }
+            // Bring the pivot column left to column `i` both in `a` and `u`
+            if pivot_col != i {
+                for r in 0..n {
+                    a.values.swap(r * n + i, r * n + pivot_col);
+                }
+                for r in 0..i {
+                    u.values.swap(r * n + i, r * n + pivot_col);
+                }
+                q.swap(i, pivot_col);
+            }
+
+            // Fill row `i` of `u` and column `i` of `l`:
+            // `U[i][j] = a[i][j]` for `j >= i` (current reduced row).
+            for j in i..n {
+                u.set(i, j, a.get(i, j));
+            }
+            // `L[k][i] = a[k][i] / pivot`, then eliminate below.
+            let pivot = a.get(i, i); // N.b.: this must be non-zero at this point.
+            for k in (i + 1)..n {
+                l.set(k, i, a.get(k, i) / pivot);
+                for j in i+1..n {
+                    a.values[k * n + j] -= l.get(k, i) * a.get(i, j);
+                }
+            }
         }
+        Some((l, u, p, q))
+    }
+
+    /// Returns the inverse of `self` assuming that `self` is an upper triangular matrix.
+    /// 
+    /// If `self` is singular or non-square, returns `None`.
+    pub fn inv_for_upper_triangular(&self) -> Option<Matrix> {
+        let n = self.n;
+        if self.m != n || (0..n).any(|i| self.get(i, i) == 0.0) {return None;}
+        let mut res = Matrix::zeros(n, n);
+        for j in 0..n {
+            res.set(j, j, 1.0 / self.get(j, j));
+            for i in (0..j).rev() {
+                res.set(i, j, -(i+1..n).map(|k| self.get(i, k) * res.get(k, j)).sum::<f64>() / self.get(i, i));
+            }
+        }
+        Some(res)
+    }
+    /// Returns the inverse of `self` assuming that `self` is a lower triangular matrix.
+    /// 
+    /// If `self` is singular or non-square, returns `None`.
+    pub fn inv_for_lower_triangular(&self) -> Option<Matrix> {
+        let n = self.n;
+        if self.m != n || (0..n).any(|i| self.get(i, i) == 0.0) {return None;}
+        let mut res = Matrix::zeros(n, n);
+        for j in 0..n {
+            res.set(j, j, 1.0 / self.get(j, j));
+            for i in j+1..n {
+                res.set(i, j, -(0..i).map(|k| self.get(i, k) * res.get(k, j)).sum::<f64>() / self.get(i, i));
+            }
+        }
+        Some(res)
+    }
+
+    /// Returns the adjugate matrix of `self`. Returns `None` if `self` is not square.
+    /// 
+    /// We decompose `A := self` into `PAQ = LDU` via the full-pivot LU decomposition where `L` and `U` only
+    /// have `1`s on their respective diagonal. Then, `A = XDY` for `X = P^t L` and `Y = U Q^t`.
+    /// 
+    /// Then, `adj(A) = adj(Y) adj(D) adj(X) = det(P) det(Q) Q adj(U) adj(D) adj(L) P`, which can be computed in O(n^3).
+    pub fn adj(&self) -> Option<Matrix> {
+        let (l, mut u, pt, qt) = self.lu_decomposition_full_pivot()?;
+        let n = self.n;
+        // Currently, U doesn't necessarily have diagonal entries (1, ..., 1). We still have to extract D.
+        let d = Matrix::diag(&(0..n).map(|i| u.get(i, i)).collect::<Vec<f64>>());
+        for i in 0..n {
+            if !utils::approx_eq(&d.get(i, i), &0.0) {
+                for j in i..n {
+                    u.values[i*n+j] /= d.get(i, i);
+                }
+            }
+        }
+        // Now, apply the formula from the documentation.
+        let det_p = if utils::permutation_parity(&pt) {1.0} else {-1.0};
+        let det_q = if utils::permutation_parity(&qt) {1.0} else {-1.0};
+        let adj_d = d.adj_for_diagonal_matrix();
+        &(det_p * det_q
+        * &(&u.adj_for_upper_triangular_matrix().permute_rows(&utils::transpose_permutation(&qt))
+        * &adj_d)?)
+        * &l.transpose().adj_for_upper_triangular_matrix()
+            .permute_rows(&utils::transpose_permutation(&pt))
+            .transpose()
+    }
+
+    /// Returns the adjugate matrix of `self` assuming that `self` is a diagonal matrix `D`. Then, `adj(D)` is the diagonal matrix with
+    /// entries `adj(D)_{i,i} = \prod_{j \neq i} D_{j,j}`.
+    /// 
+    /// Interestingly enough, this function runs in only O(n) of time (see implementation).
+    pub fn adj_for_diagonal_matrix(&self) -> Matrix {
+        // Compute the prefix products p_i := \prod_{k=0}^i D_{k,k} and the suffix products s_i := \prod_{k=i}^{n-1} D_{k,k}.
+        let mut p = Vec::<f64>::with_capacity(self.n);
+        p.push(self.get(0, 0)); // p_0 = D_{0,0}
+        for i in 1..self.n {
+            p.push(p[i-1] * self.get(i, i));
+        }
+        let mut s_reverse = Vec::<f64>::with_capacity(self.n);
+        s_reverse.push(self.get(self.n-1, self.n-1)); // s_{n-1} = D_{n-1,n-1}
+        for i in 1..self.n {
+            s_reverse.push(s_reverse[i-1] * self.get(self.n - i - 1, self.n - i - 1));
+        }
+        // Now, adj(D)_{i,i} = \prod_{j \neq i} D_{j,j} = p_{i-1} * s_{i+1} = p_{i-1} * s_reverse_{n-i}
+        let mut diag = Vec::<f64>::with_capacity(self.n);
+        diag.push(s_reverse[self.n-2]);
+        for i in 1..self.n-1 {
+            diag.push(p[i-1] * s_reverse[self.n - i - 2]);
+        }
+        diag.push(p[self.n-2]);
+        Matrix::diag(&diag)
+    }
+    
+    /// Returns the adjugate matrix of `self` assuming that `self` is a square upper triangular matrix `U`.
+    /// 
+    /// Then, `adj(U)` is also an upper triangular matrix with non-trivial entries
+    /// `adj(U)_{i,j} = (-1)^{i+j} (\prod_{p<i} U_{p,p}) (\prod_{q>j} U_{q,q}) det(H^{(i,j)})`
+    /// where `H` is the `(j-i)x(j-i)` Hessenberg matrix given by (indexing from zero)
+    /// `H^{(i,j)}_{k,l} = u_{i+k,i+1+l}`.
+    /// 
+    /// This function runs in `O(n^3)`.
+    pub fn adj_for_upper_triangular_matrix(&self) -> Matrix {
+        let n = self.n;
+        // Compute the prefix products p_i := \prod_{k=0}^i U_{k,k} and the suffix products s_i := \prod_{k=i}^{n-1} U_{k,k}.
+        let mut p = Vec::<f64>::with_capacity(n);
+        p.push(self.get(0, 0)); // p_0 = D_{0,0}
+        for i in 1..n {
+            p.push(p[i-1] * self.get(i, i));
+        }
+        let mut s_reverse = Vec::<f64>::with_capacity(n);
+        s_reverse.push(self.get(n-1, n-1)); // s_{n-1} = D_{n-1,n-1}
+        for i in 1..n {
+            s_reverse.push(s_reverse[i-1] * self.get(n - i - 1, n - i - 1));
+        }
+
+        // Notice `adj(U)` is an upper triangular matrix too
+        let mut adj = Matrix::zeros(n, n);
+
+        for i in 0..n {
+            // Fix i.
+            // To compute the determinant of H := H_{i,j}, we generally proceed as in `det_for_hessenberg_matrix`.
+            // However, we can share the subdeterminants to reduce time complexity from O(n^4) to O(n^3).
+            // Specifically, when indexing from 1, we'd have with d_r := det H_{i, i+r} (r=0,...,n-i) that
+            // d_0 = 1, d_k = \sum_{r=1}^k (-1)^{k-r} U_{i+r-1,i+k} (\prod_{t=r}^{k-1} U_{i+t,i+t}) d_{r-1}.
+            // Since indexing actually starts at zero, the code will have some indices shifted.
+            // We first compute all D_i in order (total complexity: O(n^2)).
+            let mut d = vec![0.0; n-i+1];
+            d[0] = 1.0;
+            for k in 1..n-i {
+                let mut chain = 1.0;
+                for r in (1..=k).rev() {
+                    d[k] += (if (k-r) % 2 == 0 {1.0} else {-1.0}) * self.get(i+r-1, i+k) * chain * d[r-1];
+                    if r > 1 {
+                        chain *= self.get(i+r-1, i+r-1);
+                    }
+                }
+            }
+            for j in i..n {
+                adj.set(i, j,
+                    (if (i+j) % 2 == 0 {1.0} else {-1.0})
+                    * (if i > 0 {p[i-1]} else {1.0})
+                    * (if j < n-1 {s_reverse[n-j-2]} else {1.0})
+                    * d[j-i]
+                )
+            }
+        }
+        adj
     }
 
     /// Returns the product of all diagonal entries of the matrix.
@@ -651,8 +905,9 @@ impl Matrix {
         (0..self.m).fold(1.0, |acc, i| acc * self.get(i, i))
     }
 
-    /// Returns the determinant of the matrix. Currently, this is computed via an LU-decomposition,
-    /// with a time complexity of 2/3 * n^3 + O(n^2).
+    /// Returns the determinant of `self` via an LU-decomposition.
+    /// 
+    /// Runs in 2/3 * n^3 + O(n^2).
     pub fn det(&self) -> Option<f64> {
         if self.m != self.n { return None; }
         if let Some((l, u)) = self.lu_decomposition() {
@@ -662,6 +917,27 @@ impl Matrix {
             // This immediately implies that the matrix is not invertible, that is, it has determinant zero.
             Some(0.0)
         }
+    }
+
+    /// Returns the determinant of `self` assuming that `self` is an `nxn` Hessenberg matrix.
+    /// 
+    /// This algorithm is based on the fact that (indexing from 1) with `d_k := det(H_{1:k, 1:k}` and `d_0 := 1`,
+    /// we have the recursive formula `d_k = \sum_{r=0}^k (-1)^{k-r} H_{r,k} (\prod_{t=r}^{k-1} H_{t+1,t}) d_{r-1}`.
+    /// 
+    /// Runs in O(n^2).
+    pub fn det_for_hessenberg_matrix(&self) -> f64 {
+        let mut d = vec![0.0; self.n+1];
+        d[0] = 1.0;
+        for k in 1..=self.n {
+            let mut chain = 1.0;
+            for r in (1..=k).rev() {
+                d[k] += (if (k-r) % 2 == 0 {1.0} else {-1.0}) * self.get(r-1, k-1) * chain * d[r-1];
+                if r > 1 {
+                    chain *= self.get(r-1, r-2);
+                }
+            }
+        }
+        d[self.n]
     }
 
     /// Computes the matrix `G` such that `G * self` rotates the plane spanned by the rows `i` and `j`
@@ -727,7 +1003,7 @@ impl Matrix {
         Some(((0..self.m).map(|i| h_k.get(i, i)).collect(), h_k, u_k))
     }
 
-    /// Returns `self^\top * self`.
+    /// Returns `self^t * self`.
     pub fn gram_matrix(&self) -> Matrix {
         let mut res = Matrix::zeros(self.n, self.n);
         for i in 0..self.n {
@@ -802,8 +1078,8 @@ impl Matrix {
             let eo = est;
             est = y.norm(&VectorNorm::P(p));
             let dv_y = y.dual(p);
-            // Slightly hacky; instead of `self^\top * dv_y`, we write `dv_y * self`, which I implemented as `(dv_y^\top * self)^\top` for convenience
-            // (the other operation would be undefined anyway), which in turn is mathematically exactly `self^\top * dv_y`.
+            // Slightly hacky; instead of `self^t * dv_y`, we write `dv_y * self`, which I implemented as `(dv_y^t * self)^t` for convenience
+            // (the other operation would be undefined anyway), which in turn is mathematically exactly `self^t * dv_y`.
             let z = (&dv_y * self).unwrap();
             let z_q_norm = z.norm(&VectorNorm::P(q));
             if iter > 1 && (z_q_norm < (&z * &x).unwrap() || (est - eo).abs() <= tolerance * est) {

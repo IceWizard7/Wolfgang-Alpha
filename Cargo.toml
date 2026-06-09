@@ -2,7 +2,7 @@
 name = "wolfgang_alpha"
 version = "0.1.0"
 authors = ["LvnRtg <ortega@lieven.fr>"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 getrandom = { version = "0.2.17", features = ["js"] }

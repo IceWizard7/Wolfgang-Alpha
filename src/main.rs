@@ -1,12 +1,8 @@
 use dioxus::prelude::*;
-use dioxus_logger::tracing;
-use std::vec::Vec;
 use std::cell::RefCell;
 use web_sys::window;
+use wolfgang_alpha::{math, defaults, repl};
 
-mod math;
-mod lang;
-mod defaults;
 mod js_snippets;
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -55,47 +51,16 @@ fn scroll_to_bottom(id: &str) {
 
 /// Given the user input as parameter, returns the new lines to be added to the console.
 fn validate_input(input: &str) -> Vec<String> {
-    // This creates a mutable variable that can only be accessed and modified from inside this function (making it safe)
-    // while retaining its value between function calls.
     thread_local! {
         static ENV: RefCell<math::Env> = RefCell::new(math::Env {
             constants: defaults::default_constants(),
             functions: defaults::default_functions()
         });
     }
-
-    let tokens = match lang::tokenize(input) {
-        Ok(x) => x,
-        Err(e) => {return vec![format!("[ERROR] {e}")];}
-    };
-    let mut parser = lang::Parser::from(tokens);
-    let mut output = Vec::<String>::new();
-    ENV.with(|c: &RefCell<math::Env>| {
+    ENV.with(|c| {
         let mut env = c.borrow_mut();
-        match parser.parse(&mut env) {
-            Ok(expressions) => {
-                // tracing::info!("{}", expressions.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join("; "));
-                for expr in expressions {
-                    if expr == math::Expression::Identifier("debug".to_string()) {
-                        tracing::info!("{:?}", env.constants);
-                        tracing::info!("{:?}", env.functions);
-                    }
-                    else {
-                        match lang::eval(&expr, &lang::evaluator::VarStack::Empty, &mut env) {
-                            Ok(obj) => {
-                                output = obj.to_multline();
-                            }
-                            Err(e) => {
-                                output.push(format!("[ERROR] {}", e));
-                            }
-                        }
-                    }
-                }
-            },
-            Err(e) => {output.push(format!("[ERROR] {}", e));}
-        };
-    });
-    output
+        repl::eval_line(input, &mut env)
+    })
 }
 
 #[component]

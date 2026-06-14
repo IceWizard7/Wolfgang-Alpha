@@ -1,3 +1,26 @@
+# Wolfgang Alpha
+
+A web and CLI symbolic/numeric calculator with a terminal-style interface.
+
+## Usage
+
+### Web / Desktop
+```sh
+dx serve      # web (default)
+dx serve --platform desktop
+```
+
+### CLI REPL
+```sh
+cargo run --bin cli
+```
+
+The CLI REPL reads expressions line by line. Type `exit` or `quit` to quit.
+
+---
+
+## Syntax
+
 The basic syntax is the natural one with usual operator precedence. A few special features are the following.
 - Matrices can be initialized by typing `[1, 2, 3 \ 4, 5, 6 \ 7, 8, 9]` where the rows will be `[1,2,3]`, `[4,5,6]` and `[7,8,9]` respectively.
   The backslash can be used interchangeably with a semicolon `;`, even within the same matrix.
@@ -12,7 +35,7 @@ The basic syntax is the natural one with usual operator precedence. A few specia
   The `x` on the RHS of the definition will always be the `x` passed as argument, not the constant.<br/>
   If one wants to include a constant from the current environment, simply type `f(y) := 2x + y` where `x` is a pre-defined constant. Note that the
   current value of `x` will be captured at the time of the definition; if you change `x` later on, `f` will still use its old value.
-- `debug` logs the entire current environment (constants + functions) to the browser's console (access via `F12`).
+- `debug` prints the entire current environment (constants + functions). In the web UI this goes to the browser console (`F12`); in the CLI it prints to stdout.
 - Test if two values are equal: `expr = other_expr` where both expressions must be evaluable to an `Object`. Very small errors are tolerated.
 - The same works for `<`, `<=`, `>` and `>=`. The strict comparison signs do _not_ tolerate small errors.
   As for equality, two vectors/matrices of the same size satisfy a comparison iff all of their components satisfy it.

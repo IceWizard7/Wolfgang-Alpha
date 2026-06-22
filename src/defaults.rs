@@ -111,6 +111,14 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
             }
             else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
         }),
+        expect_n_args!(sign, 1, |args: &[Object]| {
+            match &args[0] {
+                Object::Float(x) => Ok(Object::Float(if *x >= 0.0 {1.0} else {-1.0})),
+                Object::Vector(v) => Ok(Object::Vector(v.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
+                Object::Matrix(m) => Ok(Object::Matrix(m.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
+                other => Err(format!("Undefined operation `sign` for operand {:?}.", other))
+            }
+        }),
         float_1_function!(sqrt),
         float_1_function!(cos), float_1_function!(cosh), float_1_function!(acos), float_1_function!(acosh),
         float_1_function!(sin), float_1_function!(sinh), float_1_function!(asin), float_1_function!(asinh),
@@ -137,9 +145,9 @@ pub fn default_functions() -> HashMap<String, FunctionRepr> {
     ])
 }
 
-pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 18] = [
+pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 19] = [
     "exp", "ln", "log",
-    "sqrt",
+    "sign", "sqrt",
     "cos", "cosh", "acos", "acosh",
     "sin", "sinh", "asin", "asinh",
     "tan", "tanh", "atan", "atanh",
@@ -216,6 +224,11 @@ pub fn get_default_derivative(function_name: &str, point: &[Expression], directi
                 Expression::None
             ))
         }
+        "sign" => Ok(expr_if_else!(
+            expr_compare!(point[0].clone(), Eq, Expression::Number(0.0)),
+            Expression::None,
+            direction[0].clone()
+        )),
         "sqrt" => {
             if point.len() != 1 {
                 Err(format!(

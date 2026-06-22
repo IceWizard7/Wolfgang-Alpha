@@ -7,7 +7,7 @@ use crate::math::expressions::*;
 use crate::math::utils::approx_eq;
 use crate::math::{Env, Object, DirectFunction, FunctionRepr, Vector, Matrix};
 use crate::math::operations::{BinaryOperation, FoldedOperation, UnaryOperation};
-use crate::{defaults, expr_compare, expr_if_else, expr_neg, lang};
+use crate::{defaults, expr_compare, expr_if_else, expr_sub, expr_mul, expr_div, expr_pow, expr_neg, expr_1arg_func, lang};
 use lang::evaluator::VarStack;
 
 /// Differentiates the given expression w.r.t. the variable `wrt` analytically, that is, by parsing the expression recursively and
@@ -86,9 +86,24 @@ pub fn analytic_partial_derivative(
                         VectorNorm::P(p) => {
                             // In this case, \partial_j ||y||_p = (|y_j| / ||y||_p)^{p-1} sign(y_j).
                             // Hence, D(f(g(x)))[Dg(x)[1]] = (\partial_j ||y||_p |_{g(x)})_j * (g'_j(x))_j
-                            //                             = ((|g_j(x)| / ||g(x)||_p)^{p-1} sign(g_j(x))_j * (g'_j(x))_j
-                            //                             = \sum_{j=1}^n (|g_j(x)| / ||g(x)||_p)^{p-1} * sign(y_j) * g'_j(x)
-                            unimplemented!() // TODO when sums are available
+                            //                             = ((|g_j(x)| / ||g(x)||_p)^{p-1} sign(g_j(x)))_j * (g'_j(x))_j
+                            //                               (vector multiplication)
+                            let left = Expression::Vector(g_exprs.iter().map(|g_j|
+                                expr_mul!(
+                                    expr_1arg_func!("sign", g_j.clone()),
+                                    expr_pow!(
+                                        expr_div!(
+                                            Expression::UnaryOperation(UnaryOperation::Abs, Box::new(g_j.clone())),
+                                            Expression::UnaryOperation(UnaryOperation::Norm(opt.clone()), Box::new(Expression::Vector(g_exprs.clone())))
+                                        ),
+                                        expr_sub!(Expression::Number(p), Expression::Number(1.0))
+                                    )
+                                )
+                            ).collect());
+                            let right = Expression::Vector(g_exprs.iter().map(|g_j|
+                                analytic_partial_derivative(g_j, wrt, extra_vars, env)
+                            ).collect::<Result<Vec<_>, _>>()?);
+                            Ok(expr_mul!(left, right))
                         }
                     }
                 }

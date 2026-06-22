@@ -422,6 +422,16 @@ macro_rules! expr_div {
     };
 }
 #[macro_export]
+macro_rules! expr_pow {
+    ($lhs:expr, $rhs:expr) => {
+        Expression::BinaryOperation(
+            Box::new($lhs),
+            BinaryOperation::Pow,
+            Box::new($rhs)
+        )
+    };
+}
+#[macro_export]
 macro_rules! expr_inv {
     ($rhs:expr) => {
         Expression::BinaryOperation(

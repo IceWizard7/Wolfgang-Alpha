@@ -458,6 +458,41 @@ impl Expression {
             }
         }
     }
+
+    pub fn contains_identifier(&self, identifier: &String) -> bool {
+        match self {
+            Expression::None | Expression::Number(_) => false,
+            Expression::Identifier(x) => identifier == x,
+            Expression::Tuple(v) | Expression::Vector(v) | Expression::Matrix(.., v)
+                => v.iter().any(|e| e.contains_identifier(identifier)),
+            Expression::UnaryOperation(_, expr) => expr.contains_identifier(identifier),
+            Expression::BinaryOperation(lhs, _, rhs) => {
+                lhs.contains_identifier(identifier)
+                || rhs.contains_identifier(identifier)
+            }
+            Expression::FoldedOperation(.., from, conditions, to, inner) => {
+                from.contains_identifier(identifier)
+                || conditions.iter().any(|c| c.contains_identifier(identifier))
+                || to.contains_identifier(identifier)
+                || inner.contains_identifier(identifier)
+            }
+            Expression::Function(_, args) => {
+                args.iter().any(|arg| arg.contains_identifier(identifier))
+            }
+            Expression::Assignment(_, rhs) => rhs.contains_identifier(identifier),
+            Expression::PartialDerivative(_, expr) => expr.contains_identifier(identifier),
+            Expression::DirectionalDerivative(_, expr, point, direction) => {
+                expr.contains_identifier(identifier)
+                || point.iter().any(|v| v.contains_identifier(identifier))
+                || direction.iter().any(|v| v.contains_identifier(identifier))
+            },
+            Expression::IfElse(x, y, z) => {
+                x.contains_identifier(identifier)
+                || y.contains_identifier(identifier)
+                || z.contains_identifier(identifier)
+            }
+        }
+    }
 }
 
 

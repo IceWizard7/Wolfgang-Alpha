@@ -62,7 +62,11 @@ where F: FnMut(T) -> Result<U, String>,
 }
 
 
-/// Integrates the given expresion numerically from a to b.
+/// Numerically integrates the given expresion numerically from a to b.
+/// 
+/// Procedure: if the expression is of a special form (e.g. a sum, a constant, etc.; for a detailed list, cf. implementation),
+/// compute the integral accordingly (e.g. via direct calculation for constants or by integrating both summands and then adding the results).
+/// If no special form is found, integrate numericaclly using the Simpson rule on a grid of 100 equally distributed points.
 pub fn integrate(expr: &Expression, a: f64, b: f64, wrt: &String, extra_vars: &VarStack, env: &mut Env) -> Result<Object, String> {
     match expr {
         Expression::None => Ok(Object::Undefined),

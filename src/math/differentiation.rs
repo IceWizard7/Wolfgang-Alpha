@@ -5,7 +5,7 @@ use crate::math::matrices_and_vectors::VectorNorm;
 use crate::math::objects::{try_operation};
 use crate::math::expressions::*;
 use crate::math::utils::approx_eq;
-use crate::math::{Env, Object, DirectFunction, FunctionRepr, VarStack, Vector, Matrix};
+use crate::math::{Env, Object, FunctionRepr, VarStack, Vector, Matrix};
 use crate::math::operations::{BinaryOperation, FoldedOperation, UnaryOperation};
 use crate::{defaults, expr_compare, expr_if_else, expr_sub, expr_mul, expr_div, expr_pow, expr_neg, expr_1arg_func, lang};
 
@@ -200,16 +200,35 @@ pub fn analytic_partial_derivative(
         Expression::DirectionalDerivative(..)
             // The directional derivative is an object, so whatever it actually is, its derivative is zero.
             => Ok(Expression::Number(0.0)),
+        Expression::Integral(inner, a, b, int_var) => {
+            // Since we can't always exchange differentiation and integration, we proceed as follows. First,
+            // check if the integral is of the special form \int_{a(x)}^{b(x)} h(y) dy where x = wrt and h does not involve x.
+            // Then, the derivative would be h(b(x)) - h(a(x)). Otherwise, define a hidden function ___int_...(x) := \int_{a(x)}^{b(x)} h(x, y) dy
+            // and return ___diff_num_...
+            if !inner.contains_identifier(wrt) {
+                Ok(expr_sub!(
+                    inner.replace_identifiers(int_var, &b.clone()),
+                    inner.replace_identifiers(int_var, &a.clone())
+                ))
+            } else {
+                let n = (0..).find(|i| !env.functions.contains_key(&format!("___int_{i}"))).unwrap();
+                let function_name = format!("___int_{n}");
+                let res = analytic_partial_derivative_for_direct_function(wrt, &function_name, vec![Expression::Identifier(int_var.clone())], extra_vars, env);
+                env.functions.insert(function_name, FunctionRepr::ByExpression(vec![int_var.clone()], expr.clone()));
+                res
+            }
+        }
         Expression::IfElse(x, y, z)
             => Ok(Expression::IfElse(x.clone(), Box::new(analytic_partial_derivative(y, wrt, extra_vars, env)?), Box::new(analytic_partial_derivative(z, wrt, extra_vars, env)?))),
     }
 }
 
+/// Computes the analytic partial derivative of `f(*g_exprs)` w.r.t. `wrt`.
 fn analytic_partial_derivative_for_function(
     wrt: &String,
     function_name: &String,
     f: &FunctionRepr,
-    mut g_exprs: Vec<Expression>,
+    g_exprs: Vec<Expression>,
     extra_vars: &VarStack,
     env: &mut Env
 ) -> Result<Expression, String> {
@@ -250,25 +269,39 @@ fn analytic_partial_derivative_for_function(
                 Ok(defaults::get_default_derivative(function_name.as_str(), &g_exprs, &differentiated_components_of_g)?)
             }
             else {
-                // Importantly, note that the directional derivative is a separate function. Therefore, we can assume w.l.o.g. that `f \circ g` maps from `\R` to `\R`.
-                // For each component of `g` (note that `g` maps from `\R` to `\R^n`), analytically differentiate that component w.r.t. `wrt` (which is the input of `g`).
-                // We save these into a vector already to avoid calling `analytic_derivative` more often than necessary.
-                // The returned expression should be (writing `x` for `wrt`)
-                // ```d/dx f(g(x)) |_x
-                //     = D(f \circ g)(x)[1]        (since `f \circ g` maps from `\R` to `\R`)
-                //     = Df(g(x))[Dg(x)[1]]        (chain rule)```
-                // In the program's syntax, this is equivalent to calling `___diff_num_f` with arguments `arg_expressions` concatenated with `(d/dx g_1, ... d/dx g_n)})`
-                g_exprs.reserve(g_exprs.len());
-                g_exprs.extend(g_exprs.iter()
-                    .map(|g_i| analytic_partial_derivative(g_i, wrt, extra_vars, env))
-                    .collect::<Result<Vec<_>, _>>()?);
-                Ok(Expression::Function(
-                    format!("___diff_num_{}", function_name),
-                    g_exprs
-                ))
+                analytic_partial_derivative_for_direct_function(wrt, function_name, g_exprs, extra_vars, env)
             }
         }
     }
+}
+
+/// Computes the analytic partial derivative of `f(*g_exprs)` w.r.t. `wrt` where `f` is an existing function in `env` with direct representation
+/// by simply packing it into a `__diff_num` expression.
+/// 
+/// Note: this also works if `f` has another representation but shouldn't be used in that case since it loses precision.
+fn analytic_partial_derivative_for_direct_function(
+    wrt: &String,
+    function_name: &String,
+    mut g_exprs: Vec<Expression>,
+    extra_vars: &VarStack,
+    env: &mut Env
+) -> Result<Expression, String> {
+    // Importantly, note that the directional derivative is a separate function. Therefore, we can assume w.l.o.g. that `f \circ g` maps from `\R` to `\R`.
+    // For each component of `g` (note that `g` maps from `\R` to `\R^n`), analytically differentiate that component w.r.t. `wrt` (which is the input of `g`).
+    // We save these into a vector already to avoid calling `analytic_derivative` more often than necessary.
+    // The returned expression should be (writing `x` for `wrt`)
+    // ```d/dx f(g(x)) |_x
+    //     = D(f \circ g)(x)[1]        (since `f \circ g` maps from `\R` to `\R`)
+    //     = Df(g(x))[Dg(x)[1]]        (chain rule)```
+    // In the program's syntax, this is equivalent to calling `___diff_num_f` with arguments `arg_expressions` concatenated with `(d/dx g_1, ... d/dx g_n)})`
+    g_exprs.reserve(g_exprs.len());
+    g_exprs.extend(g_exprs.iter()
+        .map(|g_i| analytic_partial_derivative(g_i, wrt, extra_vars, env))
+        .collect::<Result<Vec<_>, _>>()?);
+    Ok(Expression::Function(
+        format!("___diff_num_{}", function_name),
+        g_exprs
+    ))
 }
 
 /// Analytically differentiates `expr` at point `point` in direction `direction` w.r.t. the variables in `vars`.
@@ -454,12 +487,12 @@ pub fn analytic_directional_derivative(
             ).collect::<Result<Vec<_>, _>>()?;
             // Finally, apply the chain rule. If `f` has a representation via expression, we can get Df by a recursive call of this function.
             // In case of a direct representation, we have to fall back on a numerical directional derivative.
-            let reinsert_later = env.functions.remove(function_name).ok_or(format!("No such function: {}", function_name))?;
+            let mut reinsert_later = env.functions.remove(function_name).ok_or(format!("No such function: {}", function_name))?;
             let res = match reinsert_later {
                 FunctionRepr::ByExpression(ref argnames, ref function_expr) => analytic_directional_derivative(
                     argnames, function_expr, &g_of_point, &differentiated_components_of_g, &varstack, env
                 ),
-                FunctionRepr::Direct(ref f) => numerical_directional_derivative(
+                FunctionRepr::Direct(ref mut f) => numerical_directional_derivative(
                     f, g_of_point, differentiated_components_of_g
                 )
             };
@@ -475,6 +508,46 @@ pub fn analytic_directional_derivative(
         Expression::DirectionalDerivative(..) => {
             // The directional derivative is an object, so whatever it actually is, its derivative is zero.
             Ok(Object::Float(0.0))
+        }
+        Expression::Integral(inner, a_expr, b_expr, int_var) => {
+            // Proceed as in `analytic_partial_derivative`. Notice that for a, b: \R^n \to \R, we still have
+            // D_v \int_{a(x)}^{b(x)} h(y) dy = h(b(x)) D_v b(x) - h(a(x)) D_v a(x) for every x, v \in \R^n.
+            if !vars.iter().any(|var| inner.contains_identifier(var)) {
+                let dva = analytic_directional_derivative(vars, a_expr, point, direction, extra_vars, env)?;
+                let dvb = analytic_directional_derivative(vars, b_expr, point, direction, extra_vars, env)?;
+                let new_frame = (0..vars.len()).map(|i| (&vars[i], &point[i])).collect();
+                let bx = lang::eval(
+                    b_expr,
+                    &VarStack::Frame { vars: &new_frame, parent: extra_vars },
+                    env
+                )?;
+                let ax = lang::eval(
+                    a_expr,
+                    &VarStack::Frame { vars: &new_frame, parent: extra_vars },
+                    env
+                )?;
+                let hbx = lang::eval(
+                    inner,
+                    &VarStack::Frame { vars: &HashMap::from([(int_var, &bx)]), parent: extra_vars },
+                    env
+                )?;
+                let hax = lang::eval(
+                    inner,
+                    &VarStack::Frame { vars: &HashMap::from([(int_var, &ax)]), parent: extra_vars },
+                    env
+                )?;
+                try_operation(
+                    &try_operation(&hbx, &dvb, &BinaryOperation::Mul)?,
+                    &try_operation(&hax, &dva, &BinaryOperation::Mul)?,
+                    &BinaryOperation::Sub
+                )
+            } else {
+                numerical_directional_derivative(&mut (|args: &[Object]| lang::eval(
+                    expr,
+                    &VarStack::Frame { vars: &(0..vars.len()).map(|i| (&vars[i], &args[i])).collect(), parent: extra_vars },
+                    env
+                )), point.to_vec(), direction.to_vec())
+            }
         }
         Expression::IfElse(condition, iftrue, iffalse) => {
             // D (if c(x) {a(x)} else {b(x)})(x)[d] = if c(x) {Da(x)[d]} else {Db(x)[d]}
@@ -500,7 +573,7 @@ pub fn analytic_directional_derivative(
 /// 
 /// Unfortunately, `point` has to be owned (or we'd have to clone it) since we want to modify it and the original passed vector need not to be mutable.
 /// Moreover, also owning `direction` allows to decrease the number of required operations.
-pub fn numerical_directional_derivative(f: &DirectFunction, mut point: Vec<Object>, mut direction: Vec<Object>) -> Result<Object, String> {
+pub fn numerical_directional_derivative<F: FnMut(&[Object]) -> Result<Object, String>>(f: &mut F, mut point: Vec<Object>, mut direction: Vec<Object>) -> Result<Object, String> {
     if point.len() != direction.len() {
         return Err("`point` and `direction` for derivative must be vectors of the same length (possibly 1).".to_string());
     }

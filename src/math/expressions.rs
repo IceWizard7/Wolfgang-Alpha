@@ -29,6 +29,8 @@ pub enum Expression {
     PartialDerivative(String, Box<Expression>),
     /// Compute the directional derivative of `SecondArg` at point `ThirdArg` in direction `FourthArg` where the variables w.r.t. which we differentiate are `first_args`.
     DirectionalDerivative(Vec<String>, Box<Expression>, Vec<Expression>, Vec<Expression>),
+    /// E.g. `int_a^b f(x) dx` gives `Integral(f(x), a, b, x)`.
+    Integral(Box<Expression>, Box<Expression>, Box<Expression>, String),
     /// `if (FirstArg) { SecondArg } else { ThirdArg }`
     IfElse(Box<Expression>, Box<Expression>, Box<Expression>)
 }
@@ -63,12 +65,23 @@ impl fmt::Display for Expression {
             Expression::PartialDerivative(wrt, expr) => write!(f, "d/d{} ({})", wrt, expr),
             Expression::DirectionalDerivative(vars, expr, point, direction)
                 => write!(f, "D_{{{}}} ({})({:?})[{:?}]", vars.join(", "), expr, point, direction),
+            Expression::Integral(func, a, b, x)
+                => write!(f, "int_{{{}}}^{{{}}} ({}) d{}", a, b, func, x),
             Expression::IfElse(condition, iftrue, iffalse)
                 => write!(f, "if ({}) {{{}}} else {{{}}}", condition, iftrue, iffalse),
         }
     }
 }
 impl Expression {
+    /// Returns `format!("{}", self)` surrounded by braces if the expression isn't an identifier or a number.
+    pub fn to_string_with_braces(&self) -> String {
+        match self {
+            Expression::Number(x) => x.to_string(),
+            Expression::Identifier(x) => x.clone(),
+            other => format!("{{{}}}", other)
+        }
+    }
+
     /// Formats an object to a string that may stretch over multiple lines.
     /// The lines will be returned as a vector of strings, not as a single string containing newline chars.
     /// 
@@ -246,6 +259,18 @@ impl Expression {
                 ).as_str());
                 multlined_expr
             }
+            Expression::Integral(func, a, b, x) => {
+                let mut multlined = func.to_multline();
+                if multlined.len() == 1 {
+                    multlined[0].insert_str(0, format!("int_{}^{} ", a.to_string_with_braces(), b.to_string_with_braces()).as_str());
+                    multlined[0].push_str(format!(" d{}", x).as_str());
+                } else {
+                    multlined.iter_mut().for_each(|l| l.insert_str(0, "  "));
+                    multlined.insert(0, format!("int_{}^{}", a.to_string_with_braces(), b.to_string_with_braces()));
+                    multlined.push(format!(" d{}", x));
+                }
+                multlined
+            }
             Expression::IfElse(condition, iftrue, iffalse) => {
                 let mut multlined_cond = condition.to_multline();
                 let mut multlined_true = iftrue.to_multline();
@@ -372,10 +397,18 @@ impl Expression {
             Expression::Matrix(m, n, v) => Expression::Matrix(*m, *n, v.iter().map(|x| x.replace_identifiers(ident, by)).collect()),
             Expression::Function(name, v) => Expression::Function(name.clone(), v.iter().map(|x| x.replace_identifiers(ident, by)).collect()),
             Expression::UnaryOperation(op, x) => Expression::UnaryOperation(op.clone(), Box::new(x.replace_identifiers(ident, by))),
-            Expression::PartialDerivative(wrt, x) => Expression::PartialDerivative(wrt.clone(), Box::new(x.replace_identifiers(ident, by))),
-            Expression::Assignment(lhs, rhs) => Expression::Assignment(lhs.clone(), Box::new(rhs.replace_identifiers(ident, by))),
             Expression::BinaryOperation(lhs, op, rhs)
                 => Expression::BinaryOperation(Box::new(lhs.replace_identifiers(ident, by)), op.clone(), Box::new(rhs.replace_identifiers(ident, by))),
+            Expression::FoldedOperation(op, varname, from, conditions, to, inner) => Expression::FoldedOperation(
+                op.clone(),
+                varname.clone(),
+                Box::new(from.replace_identifiers(ident, by)),
+                conditions.iter().map(|x| x.replace_identifiers(ident, by)).collect(),
+                Box::new(to.replace_identifiers(ident, by)),
+                Box::new(inner.replace_identifiers(ident, by))
+            ),
+            Expression::PartialDerivative(wrt, x) => Expression::PartialDerivative(wrt.clone(), Box::new(x.replace_identifiers(ident, by))),
+            Expression::Assignment(lhs, rhs) => Expression::Assignment(lhs.clone(), Box::new(rhs.replace_identifiers(ident, by))),
             Expression::DirectionalDerivative(vars, expr, point, direction) => Expression::DirectionalDerivative(
                 vars.clone(),
                 Box::new(expr.replace_identifiers(ident, by)),
@@ -387,13 +420,11 @@ impl Expression {
                 Box::new(y.replace_identifiers(ident, by)),
                 Box::new(z.replace_identifiers(ident, by))
             ),
-            Expression::FoldedOperation(op, varname, from, conditions, to, inner) => Expression::FoldedOperation(
-                op.clone(),
-                varname.clone(),
-                Box::new(from.replace_identifiers(ident, by)),
-                conditions.iter().map(|x| x.replace_identifiers(ident, by)).collect(),
-                Box::new(to.replace_identifiers(ident, by)),
-                Box::new(inner.replace_identifiers(ident, by))
+            Expression::Integral(func, a, b, x) => Expression::Integral(
+                Box::new(func.replace_identifiers(ident, by)),
+                Box::new(a.replace_identifiers(ident, by)),
+                Box::new(b.replace_identifiers(ident, by)),
+                x.clone()
             )
         }
     }
@@ -444,17 +475,46 @@ impl Expression {
                 args.iter().map(|arg| arg.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
             }
             Expression::Assignment(_, rhs) => rhs.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything), // Do not modify the LHS of assignment expressions
-            Expression::PartialDerivative(_, expr) => expr.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything),
-            Expression::DirectionalDerivative(_, expr, point, direction) => {
-                expr.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
+            Expression::PartialDerivative(wrt, expr) => expr.list_unknown_identifiers(
+                &VarStack::Frame { // Same proceeding as in `Expression::FoldedOperation`
+                    vars: &HashMap::from([(wrt, &Object::Success)]),
+                    parent: extra_vars
+                },
+                env,
+                modified_identifiers,
+                modified_anything
+            ),
+            Expression::DirectionalDerivative(vars, expr, point, direction) => {
+                expr.list_unknown_identifiers(
+                    &VarStack::Frame {
+                        vars: &vars.iter().map(|v| (v, &Object::Success)).collect(),
+                        parent: extra_vars
+                    },
+                    env,
+                    modified_identifiers,
+                    modified_anything
+                )
                 || point.iter().map(|v| v.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
                 || direction.iter().map(|v| v.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)).collect::<Vec<_>>().iter().any(|x| *x)
-            },
+            }
             Expression::IfElse(x, y, z) => {
                 // This will modify something iff at least either LHS or RHS is modified.
                 x.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
                 || y.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
                 || z.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
+            }
+            Expression::Integral(func, a, b, wrt) => {
+                func.list_unknown_identifiers(
+                    &VarStack::Frame {
+                        vars: &HashMap::from([(wrt, &Object::Success)]),
+                        parent: extra_vars
+                    },
+                    env,
+                    modified_identifiers,
+                    modified_anything
+                )
+                || a.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
+                || b.list_unknown_identifiers(extra_vars, env, modified_identifiers, modified_anything)
             }
         }
     }
@@ -490,6 +550,11 @@ impl Expression {
                 x.contains_identifier(identifier)
                 || y.contains_identifier(identifier)
                 || z.contains_identifier(identifier)
+            },
+            Expression::Integral(func, a, b, wrt) => {
+                a.contains_identifier(identifier)
+                || b.contains_identifier(identifier)
+                || (func.contains_identifier(identifier) && wrt != identifier) // Ignore presence of `identifier` in `func` if we integrate w.r.t. `identifier`
             }
         }
     }

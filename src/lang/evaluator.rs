@@ -46,8 +46,9 @@ pub fn parse_function_definition(
                 Expression::Identifier(format!("___tmp_{}", x))
             } else if let Some(y) = env.constants.get(x) {
                 y.to_expression()
-            }
-            else {
+            } else if let Some(y) = extra_vars.lookup(x) {
+                y.to_expression()
+            } else {
                 Expression::Identifier(x.clone())
             }
         },
@@ -104,6 +105,12 @@ pub fn parse_function_definition(
             Box::new(parse_function_definition(expr, argument_names, extra_vars, env)?),
             point.iter().map(|x| parse_function_definition(x, argument_names, extra_vars, env)).collect::<Result<Vec<_>, _>>()?,
             direction.iter().map(|x| parse_function_definition(x, argument_names, extra_vars, env)).collect::<Result<Vec<_>, _>>()?
+        ),
+        Expression::Integral(inner, a, b, x) => Expression::Integral(
+            Box::new(parse_function_definition(inner, argument_names, extra_vars, env)?),
+            Box::new(parse_function_definition(a, argument_names, extra_vars, env)?),
+            Box::new(parse_function_definition(b, argument_names, extra_vars, env)?),
+            x.clone()
         ),
         Expression::IfElse(x, y, z) => Expression::IfElse(
             Box::new(parse_function_definition(x, argument_names, extra_vars, env)?),
@@ -352,9 +359,9 @@ pub fn eval(
                         return Err("___diff_num_{{...}} takes an even number of arguments.".to_string()); // See splitting of arguments below
                     }
                 } else { given_arg_exprs };
-                let rm = env.functions.remove(real_function_name);
+                let mut rm = env.functions.remove(real_function_name);
                 let res = match rm {
-                    Some(FunctionRepr::Direct(ref f)) => {
+                    Some(FunctionRepr::Direct(ref mut f)) => {
                         // The given arguments should then have the format `point <concat> direction`, so we have to split the arguments
                         // into two parts (splitting in the middle of the array which we ensured has even size).
                         let point = (0..arg_exprs.len()/2)
@@ -405,6 +412,11 @@ pub fn eval(
                 .collect::<Result<Vec<_>, _>>()?;
             math::differentiation::analytic_directional_derivative(vars, expr, &point, &direction, extra_vars, env)
         }
+        Expression::Integral(inner, a_expr, b_expr, wrt) => {
+            let a = eval(a_expr, extra_vars, env)?.expect_float()?;
+            let b = eval(b_expr, extra_vars, env)?.expect_float()?;
+            math::integration::integrate(inner, a, b, wrt, extra_vars, env)
+        }
         Expression::IfElse(condition, iftrue, iffalse) => {
             match eval(condition, extra_vars, env) {
                 Ok(Object::Float(1.0)) => eval(iftrue, extra_vars, env),
@@ -440,7 +452,7 @@ fn eval_function(
             eval(defining_expr, &new_stack, env)
         }
         FunctionRepr::Direct(f) => {
-            (*f)(&given_arg_exprs.iter()
+            f(&given_arg_exprs.iter()
                 .map(|arg_expr| eval(arg_expr, extra_vars, env))
                 .collect::<Result<Vec<_>, _>>()?)
         }

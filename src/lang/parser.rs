@@ -4,53 +4,8 @@ use std::collections::HashSet;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
-use crate::math::{BinaryOperation, Comparison, UnaryOperation, FoldedOperation, Expression, FunctionRepr, Env};
-use crate::lang::lexer::Token;
-
-
-fn get_unknown_identifiers(expr: &Expression, identifiers: &mut HashSet<String>, env: &Env) {
-    match expr {
-        Expression::None | Expression::Number(_) => {}
-        Expression::Identifier(x) => {
-            if !env.constants.contains_key(x) {
-                identifiers.insert(x.clone());
-            }
-        }
-        Expression::Tuple(v) | Expression::Vector(v) | Expression::Matrix(.., v) | Expression::Function(_, v) => {
-            for x in v {
-                get_unknown_identifiers(x, identifiers, env);
-            }
-        }
-        Expression::UnaryOperation(_, x) => get_unknown_identifiers(x, identifiers, env),
-        Expression::BinaryOperation(x, _, y) | Expression::Assignment(x, y) => {
-            get_unknown_identifiers(x, identifiers, env);
-            get_unknown_identifiers(y, identifiers, env);
-        }
-        Expression::FoldedOperation(.., v, y, z) => {
-            for x in v {
-                get_unknown_identifiers(x, identifiers, env);
-            }
-            get_unknown_identifiers(y, identifiers, env);
-            get_unknown_identifiers(z, identifiers, env);
-        }
-        Expression::PartialDerivative(wrt, x) => {
-            let b = identifiers.contains(wrt);
-            get_unknown_identifiers(x, identifiers, env);
-            if !b {identifiers.remove(wrt);}
-        }
-        Expression::DirectionalDerivative(vars, x, ..) => {
-            let rm: Vec<&String> = vars.iter().filter(|v| !identifiers.contains(*v)).collect(); // Need to collect to call next line
-            get_unknown_identifiers(x, identifiers, env);
-            for v in rm {identifiers.remove(v);}
-        }
-        Expression::IfElse(x, y, z) => {
-            get_unknown_identifiers(x, identifiers, env);
-            get_unknown_identifiers(y, identifiers, env);
-            get_unknown_identifiers(z, identifiers, env);
-        }
-    }
-}
-
+use crate::math::{BinaryOperation, Comparison, UnaryOperation, FoldedOperation, Expression, FunctionRepr, Env, VarStack};
+use crate::lang::lexer::{Token, tokenize};
 
 pub struct Parser {
     pub tokens: Peekable<IntoIter<Token>>
@@ -80,6 +35,8 @@ impl Parser {
     //     t
     // }
 
+    /// Consumes and compares the next token with `token`. Returns `()` if they are equal, otherwise an appropriate error string.
+    /// Adding a parameter `context` allows to specify something in the returned error message.
     fn expect_token(&mut self, token: Token, context: Option<&str>) -> Result<(), String> {
         let next = self.next()?;
         if next != token {
@@ -114,7 +71,8 @@ impl Parser {
             Token::Identifier(x) => Ok(Expression::Identifier(x)),
             Token::Number(x) => Ok(Expression::Number(x)),
             Token::LBrace => {
-                let res = self.parse_expression(0, Some(Token::RBrace), env)?;
+                let f: Box<dyn Fn(&Token) -> bool> = Box::new(|t: &Token| matches!(t, Token::RBrace));
+                let res = self.parse_expression(0, Some(&f), env)?;
                 self.expect_token(Token::RBrace, None)?;
                 Ok(res)
             }
@@ -136,10 +94,10 @@ impl Parser {
 
     /// Allows to recursively parse vectors of tokens.
     /// 
-    /// If `expect_closer` is `Some(x)` and `x` is encountered in a place of an operator, the function returns early instead.
+    /// If `return_early_if` is `Some(f)` and a token `x` with `f(x) == true` is encountered in a place of an operator, the function returns early instead.
     /// This is usually unnecessary (e.g. expressions between parentheses are parsed just fine without this), but is strictly required
     /// when parsing an expression between e.g. double pipes (`||`), because this token cannot necessarily be distinguished from the "or" operator.
-    fn parse_expression(&mut self, min_precedence: u8, expect_closer: Option<Token>, env: &mut Env) -> Result<Expression, String> {
+    #[allow(clippy::type_complexity)] fn parse_expression(&mut self, min_precedence: u8, return_early_if: Option<&Box<dyn Fn(&Token) -> bool>>, env: &mut Env) -> Result<Expression, String> {
         // First, determine the LHS of the next operation to execute.
         // This is either an identifier, a number or a further expression between parentheses.
         let mut lhs = match self.next()? {
@@ -166,7 +124,7 @@ impl Parser {
                     (Token::LParenthesis, _) => {
                         if id == "D" { // Then, only parse arguments now (since we need to know `function_expr` for this)
                             let mut identifiers = HashSet::<String>::new();
-                            get_unknown_identifiers(&function_expr, &mut identifiers, env);
+                            function_expr.list_unknown_identifiers(&VarStack::Empty, env, &mut identifiers, false);
                             argnames = identifiers.into_iter().collect::<Vec<String>>();
                             argnames.sort_unstable();
                         }
@@ -209,9 +167,30 @@ impl Parser {
                 };
                 self.expect_token(Token::Circumflex, Some(" to specify end of range"))?;
                 let superscript = self.expect_brace_expr(env)?;
-                // 
                 let inner = self.parse_expression(op.priority() + 1, None, env)?;
                 Expression::FoldedOperation(op, index_var_name, Box::new(index_var_init), conditions, Box::new(superscript), Box::new(inner))
+            }
+            Token::Identifier(id) if id.starts_with("int_") => {
+                let rest = id.strip_prefix("int_").unwrap(); // Safe because of `starts_with` call above
+                let subscript = if !rest.is_empty() {
+                    // Parse `rest` and expect to get a single expression out.
+                    match Parser::from(tokenize(rest)?).parse(env)? {
+                        v if v.len() == 1 => v.into_iter().next().unwrap(), // Safe to unwrap because of length check before
+                        other => return Err(format!("Subscript after integral must be single expression (got {:?}).", other))
+                    }
+                } else {
+                    self.expect_brace_expr(env)?
+                };
+                self.expect_token(Token::Circumflex, Some(" to specify end of range"))?;
+                let superscript = self.expect_brace_expr(env)?;
+                // Parse inner expression but stop immediately if an identifier of length >= 2 starting with `d` is encountered.
+                let stopper: Box<dyn Fn(&Token) -> bool> = Box::new(|t: &Token| matches!(t, Token::Identifier(id) if id.starts_with('d') && id.len() >= 2));
+                let inner = self.parse_expression(0, Some(&stopper), env)?;
+                let int_var = match self.next()? {
+                    Token::Identifier(id) if id.starts_with("d") && id.len() >= 2 => id.strip_prefix("d").unwrap().to_string(),
+                    other => return Err(format!("Expected \"dv\" where \"v\" is some identifier; got {:?}.", other))
+                };
+                Expression::Integral(Box::new(inner), Box::new(subscript), Box::new(superscript), int_var)
             }
             Token::Identifier(x) => {
                 // We have to check whether this will be a function call: we judge this to be the case iff the next token is an LParenthesis and
@@ -281,7 +260,8 @@ impl Parser {
                 Expression::UnaryOperation(UnaryOperation::Abs, Box::new(inner))
             }
             Token::DoublePipe => { // In this context: opener of a norm
-                let inner = self.parse_expression(0, Some(Token::DoublePipe), env)?;
+                let f: Box<dyn Fn(&Token) -> bool> = Box::new(|t: &Token| matches!(t, Token::DoublePipe));
+                let inner = self.parse_expression(0, Some(&f), env)?;
                 self.expect_token(Token::DoublePipe, Some(" as closer"))?;
                 match self.peek()? {
                     Token::Identifier(ident) if ident.starts_with('_') => {
@@ -323,8 +303,11 @@ impl Parser {
         };
 
         // Then, parse the RHS recursively.
-        if let Some(c) = expect_closer && *self.peek()? == c {
-            // Importantly, do not consume the closer so the caller can check it.
+        // This is the first time we check `return_early_if`. The function could typically stop here if
+        // `return_early_if` checks for the presence of a closing `||`, which would have to be in the place
+        // where an operator is expected.
+        if let Some(f) = return_early_if && f(self.peek()?) {
+            // Importantly, do not consume the encountered token so the caller can check it.
             return Ok(lhs);
         }
         loop {
@@ -375,7 +358,7 @@ impl Parser {
             }
 
             // The RHS can only contain operators of strictly larger precedence, so we parse it with parameter 'prec+1'.
-            let rhs = self.parse_expression(prec + 1, None, env)?;
+            let rhs = self.parse_expression(prec + 1, return_early_if, env)?;
             lhs = match (lhs, &op, &rhs) {
                 // Special case: the `^` operator is traditionally right-associative and not left-associative, i.e. 2^3^2 = 2^(3^2) and not (2^3)^2.
                 (Expression::BinaryOperation(a, BinaryOperation::Pow, b), ..) if op == BinaryOperation::Pow
@@ -397,6 +380,15 @@ impl Parser {
                 // Default
                 (lhs, ..) => Expression::BinaryOperation(Box::new(lhs), op, Box::new(rhs))
             };
+            // This is the second place where `return_early_if` is checked. It was passed down when parsing the
+            // RHS recursively, so maybe, this recursive call was interrupted by `return_early_if`. However,
+            // this only stops the recursive call in `let rhs = ...`, not this current function call, which
+            // we therefore have to do now. An example where we'd land in this case is `int_0^1 x-1 dx`.
+            // For the integrand `x^2` instead, we still return because of the following lines of code,
+            // but it wans't necessary to pass `return_early_if` down while parsing the RHS.
+            if let Some(f) = return_early_if && f(self.peek()?) {
+                return Ok(lhs);
+            }
         }
 
         Ok(lhs)

@@ -88,7 +88,24 @@ pub fn parse_function_definition(
             Box::new(parse_function_definition(from, argument_names, extra_vars, env)?),
             conditions.iter().map(|x| parse_function_definition(x, argument_names, extra_vars, env)).collect::<Result<Vec<_>, _>>()?,
             Box::new(parse_function_definition(to, argument_names, extra_vars, env)?),
-            Box::new(parse_function_definition(inner, argument_names, extra_vars, env)?)
+            // Notice that if `varname` is simultaneously an argument of the function, it shouldn't be replace by ___tmp_...
+            // within `inner`. For example, `g(x) := \sum_{x=1}^2 x` should be equivalent to `g(x) := \sum_{i=1}^2 i`.
+            if let Some(i) = argument_names.iter().position(|n| n == varname) {
+                if argument_names.len() > 2 {
+                    // Still replace all identifiers in `inner` except the one at index `i`. Note that cloning is fine here since the list of argument names
+                    // should be very small (having more than two would already be very rare).
+                    Box::new(parse_function_definition(
+                        inner,
+                        &argument_names.iter().enumerate().filter(|&(idx, _)| idx != i).map(|(_, x)| x.clone()).collect(),
+                        extra_vars,
+                        env
+                    )?)
+                } else {
+                    inner.clone()
+                }
+            } else {
+                Box::new(parse_function_definition(inner, argument_names, extra_vars, env)?)
+            }
         ),
         Expression::Function(function_name, args) => Expression::Function(
             function_name.clone(),

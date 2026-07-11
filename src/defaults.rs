@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::f64::consts;
+use std::sync::LazyLock;
 
+use crate::math::DirectFunction;
 use crate::math::Expression;
 use crate::math::expressions;
 use crate::math::{Matrix, Vector, Object, FunctionRepr};
@@ -20,26 +22,23 @@ pub fn default_constants() -> HashMap<String, Object> {
 /// 2. `FunctionRepr::Direct`: expect exactly one `f64` as argument; if so, return `Ok(x.name())`, otherwise, the appropriate `Err`.
 macro_rules! float_1_function {
     ($name:ident) => {
-        (
-            stringify!($name).to_string(),
-            FunctionRepr::Direct(Box::new(|args| {
-                if args.len() != 1 {
-                    Err(format!(
-                        "Wrong number of arguments provided for function '{}' (expected 1, got {}).",
-                        stringify!($name),
-                        args.len()
-                    ))
-                } else {
-                    match args[0] {
-                        Object::Float(x) => Ok(Object::Float(x.$name())),
-                        _ => Err(format!(
-                            "Wrong type of argument provided for function '{}' (expected float).",
-                            stringify!($name)
-                        )),
-                    }
+        Box::new(|args| {
+            if args.len() != 1 {
+                Err(format!(
+                    "Wrong number of arguments provided for function '{}' (expected 1, got {}).",
+                    stringify!($name),
+                    args.len()
+                ))
+            } else {
+                match args[0] {
+                    Object::Float(x) => Ok(Object::Float(x.$name())),
+                    _ => Err(format!(
+                        "Wrong type of argument provided for function '{}' (expected float).",
+                        stringify!($name)
+                    )),
                 }
-            })),
-        )
+            }
+        })
     };
 }
 
@@ -48,121 +47,130 @@ macro_rules! float_1_function {
 /// 2. `FunctionRepr::Direct`: expect exactly `n` arguments; if so, return `expr(args)`, otherwise, the appropriate `Err`.
 macro_rules! expect_n_args {
     ($name:ident, $n:expr, $e:expr) => {
-        (
-            stringify!($name).to_string(),
-            FunctionRepr::Direct(Box::new(|args| {
-                if args.len() != $n {
-                    Err(format!(
-                        "Wrong number of arguments provided for function '{}' (expected {}, got {}).",
-                        stringify!($name),
-                        $n,
-                        args.len()
-                    ))
-                } else {
-                    $e(args)
-                }
-            })),
-        )
+        Box::new(|args: &[Object]| {
+            if args.len() != $n {
+                Err(format!(
+                    "Wrong number of arguments provided for function '{}' (expected {}, got {}).",
+                    stringify!($name),
+                    $n,
+                    args.len()
+                ))
+            } else {
+                $e(args)
+            }
+        })
     };
 }
 
 /// For examples, see the use of the macro in `default_functions`.
 macro_rules! apply_matrix_fn {
     ($name:ident, $e:expr) => {
-        (
-            stringify!($name).to_string(),
-            FunctionRepr::Direct(Box::new(|args| {
-                if args.len() != 1 {
-                    Err(format!(
-                        "Wrong number of arguments provided for function '{}' (expected 1, got {}).",
-                        stringify!($name),
-                        args.len()
-                    ))
-                } else {
-                    if let Object::Matrix(mat) = &args[0] {
-                        $e(mat.$name(), mat)
-                    }
-                    else { Err(format!("Wrong type for argument of function '{}' (expected Matrix).", stringify!($name))) }
+        Box::new(|args| {
+            if args.len() != 1 {
+                Err(format!(
+                    "Wrong number of arguments provided for function '{}' (expected 1, got {}).",
+                    stringify!($name),
+                    args.len()
+                ))
+            } else {
+                if let Object::Matrix(mat) = &args[0] {
+                    $e(mat.$name(), &mat)
                 }
-            })),
-        )
+                else { Err(format!("Wrong type for argument of function '{}' (expected Matrix).", stringify!($name))) }
+            }
+        })
     };
 }
 
+/// This approach is needed because direct functions cannot be cloned (and we need to clone the environment in some scenarios).
+/// Therefore, we want to use `&DirectFunction` instead of `DirectFunction` in `Env`; but this requires the direct functions
+/// to be permanently stored at a fixed location. This location is here.
+/// 
+/// Note that the user can't create new direct functions, so this approach works.
+pub static DEFAULT_DIRECT_FUNCTIONS: LazyLock<[DirectFunction; 22]> = LazyLock::new(|| [
+    expect_n_args!(sign, 1, |args: &[Object]| {
+        match &args[0] {
+            Object::Float(x) => Ok(Object::Float(if *x >= 0.0 {1.0} else {-1.0})),
+            Object::Vector(v) => Ok(Object::Vector(v.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
+            Object::Matrix(m) => Ok(Object::Matrix(m.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
+            other => Err(format!("Undefined operation `sign` for operand {:?}.", other))
+        }
+    }),
+
+    float_1_function!(exp),
+    float_1_function!(ln),
+    expect_n_args!(log, 2, |args: &[Object]| {
+        if let Object::Float(base) = args[1] {
+            match args[0] {
+                Object::Float(x) => Ok(Object::Float(x.log(base))),
+                _ => Err("Wrong type for first argument (value) of function 'log' (expected float).".to_string())
+            }
+        }
+        else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
+    }),
+    float_1_function!(sqrt),
+
+    float_1_function!(cos), float_1_function!(cosh), float_1_function!(acos), float_1_function!(acosh),
+    float_1_function!(sin), float_1_function!(sinh), float_1_function!(asin), float_1_function!(asinh),
+    float_1_function!(tan), float_1_function!(tanh), float_1_function!(atan), float_1_function!(atanh),
+
+    expect_n_args!(eig, 1, |args: &[Object]| {
+        if let Object::Matrix(mat) = &args[0] {
+            match mat.qr_decomposition() {
+                Some((eig, ..)) => Ok(Object::Vector(Vector{values: eig})),
+                None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
+            }
+        }
+        else { Err("Wrong type for argument of function 'eig' (expected Matrix).".to_string()) }
+    }),
+    apply_matrix_fn!(det, |r, mat: &Matrix| match r {
+        Some(res) => Ok(Object::Float(res)),
+        None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
+    }),
+    apply_matrix_fn!(adj, |r, mat: &Matrix| match r {
+        Some(res) => Ok(Object::Matrix(res)),
+        None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
+    }),
+    apply_matrix_fn!(tr, |r: Result<f64, String>, _| {r.map(Object::Float)}),
+    Box::new(|args|
+        if args.len() == 2
+        && let (Object::Vector(x), Object::Vector(y)) = (&args[0], &args[1])
+        && x.len() == y.len() {
+            let n = x.len();
+            Ok(Object::Float((0..n).map(|i|
+                x[i]
+                * if i > 0 {(0..i).map(|j| y[j]).product()} else {1.0}
+                * if i < n-1 {(i+1..n).map(|j| y[j]).product()} else {1.0}
+            ).sum()))
+        } else {
+            Err("Arguments to `___helper_prod_rule` must be two vectors of equal length.".to_string())
+        }
+    )
+]);
+
 /// Wrapped in a function because const hashmaps aren't available yet.
 pub fn default_functions() -> HashMap<String, FunctionRepr> {
-    HashMap::<String, FunctionRepr>::from([
-        ("1".to_string(), FunctionRepr::ByExpression(
-            vec!["___tmp_x".to_string()],
-            expr_if_else!(
-                Expression::Identifier("___tmp_x".to_string()),
-                Expression::Number(1.0),
-                Expression::Number(0.0)
-            )
-        )),
-        expect_n_args!(sign, 1, |args: &[Object]| {
-            match &args[0] {
-                Object::Float(x) => Ok(Object::Float(if *x >= 0.0 {1.0} else {-1.0})),
-                Object::Vector(v) => Ok(Object::Vector(v.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
-                Object::Matrix(m) => Ok(Object::Matrix(m.transform(|x| if x >= 0.0 {1.0} else {-1.0}))),
-                other => Err(format!("Undefined operation `sign` for operand {:?}.", other))
-            }
-        }),
-
-        float_1_function!(exp),
-        float_1_function!(ln),
-        expect_n_args!(log, 2, |args: &[Object]| {
-            if let Object::Float(base) = args[1] {
-                match args[0] {
-                    Object::Float(x) => Ok(Object::Float(x.log(base))),
-                    _ => Err("Wrong type for first argument (value) of function 'log' (expected float).".to_string())
-                }
-            }
-            else { Err("Wrong type for second argument (base) of function 'log' (expected float).".to_string()) }
-        }),
-        float_1_function!(sqrt),
-
-        float_1_function!(cos), float_1_function!(cosh), float_1_function!(acos), float_1_function!(acosh),
-        float_1_function!(sin), float_1_function!(sinh), float_1_function!(asin), float_1_function!(asinh),
-        float_1_function!(tan), float_1_function!(tanh), float_1_function!(atan), float_1_function!(atanh),
-
-        expect_n_args!(eig, 1, |args: &[Object]| {
-            if let Object::Matrix(mat) = &args[0] {
-                match mat.qr_decomposition() {
-                    Some((eig, ..)) => Ok(Object::Vector(Vector{values: eig})),
-                    None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
-                }
-            }
-            else { Err("Wrong type for argument of function 'eig' (expected Matrix).".to_string()) }
-        }),
-        apply_matrix_fn!(det, |r, mat: &Matrix| match r {
-            Some(res) => Ok(Object::Float(res)),
-            None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
-        }),
-        apply_matrix_fn!(adj, |r, mat: &Matrix| match r {
-            Some(res) => Ok(Object::Matrix(res)),
-            None => Err(format!("Matrix must be quadratic (got size {}x{}).", mat.m, mat.n))
-        }),
-        apply_matrix_fn!(tr, |r: Result<f64, String>, _| {r.map(Object::Float)}),
-
-        // Takes two vectors (x_1, ..., x_n) and (y_1, ..., y_n) and returns \sum_{i=1}^n x_i \prod_{j \neq i} y_j.
-        ("___helper_prod_rule".to_string(), FunctionRepr::Direct(
-            Box::new(|args|
-                if args.len() == 2
-                && let (Object::Vector(x), Object::Vector(y)) = (&args[0], &args[1])
-                && x.len() == y.len() {
-                    let n = x.len();
-                    Ok(Object::Float((0..n).map(|i|
-                        x[i]
-                        * if i > 0 {(0..i).map(|j| y[j]).product()} else {1.0}
-                        * if i < n-1 {(i+1..n).map(|j| y[j]).product()} else {1.0}
-                    ).sum()))
-                } else {
-                    Err("Arguments to `___helper_prod_rule` must be two vectors of equal length.".to_string())
-                }
-            )
-        ))
-    ])
+    // Just collect all elements in `DEFAULT_DIRECT_FUNCTIONS` into a hashmap along with the appropriate function names
+    let mut res: HashMap<String, FunctionRepr> = vec![
+        "sign", "exp", "ln", "log", "sqrt",
+        "cos", "cosh", "acos", "acosh",
+        "sin", "sinh", "asin", "asinh",
+        "tan", "tanh", "atan", "atanh",
+        "eig", "det", "adj", "tr",
+        "___helper_prod_rule"
+    ].into_iter().enumerate().map(
+        |(i, n)|
+        (n.to_string(), FunctionRepr::Direct(&DEFAULT_DIRECT_FUNCTIONS[i]))
+    ).collect();
+    res.insert("1".to_string(), FunctionRepr::ByExpression(
+        vec!["___tmp_x".to_string()],
+        expr_if_else!(
+            Expression::Identifier("___tmp_x".to_string()),
+            Expression::Number(1.0),
+            Expression::Number(0.0)
+        )
+    ));
+    res
 }
 
 pub const FUNCTIONS_WITH_PROVIDED_DERIVATIVE: [&str; 19] = [

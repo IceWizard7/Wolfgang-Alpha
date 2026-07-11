@@ -176,9 +176,22 @@ pub fn eval(
         },
         Expression::Number(x) => Ok(Object::Float(*x)),
         Expression::Tuple(entries) => {
-            Ok(Object::Tuple(entries.iter().map(|x|
-                eval(x, extra_vars, env).map_err(|e| format!("Couldn't evaluate entry {}. Traceback: {}", x, e))
-            ).collect::<Result<Vec<_>, _>>()?))
+            // As mentioned in the docs, we capture the environment for tuple evaluation.
+            // Two approaches:
+            // 1. Capture `env` at the start, clone it for every `x` in `entries`, call `eval(x)` with is, merge it into `env` after `eval(x)`.
+            //    Slightly more overhead (+1 clone) but O(1) space.
+            // 2. No capture at the start, proceed as above but only merge with `env` at the end of ALL `eval` calls.
+            //    Less overhead but O(n) space.
+            // => Choose 1.
+            let captured_env = env.clone();
+            let mut results = Vec::<Object>::with_capacity(entries.len());
+            for x in entries.iter() {
+                let mut tmp_env = captured_env.clone();
+                results.push(eval(x, extra_vars, &mut tmp_env).map_err(|e| format!("Couldn't evaluate entry {}. Traceback: {}", x, e))?);
+                // TODO: merge tmp_env into env
+
+            }
+            Ok(Object::Tuple(results))
         },
         Expression::Vector(entries) => {
             Ok(Object::Vector(math::Vector{values: entries.iter().map(
@@ -376,10 +389,10 @@ pub fn eval(
                         return Err("___diff_num_{{...}} takes an even number of arguments.".to_string()); // See splitting of arguments below
                     }
                 } else { given_arg_exprs };
-                let mut rm = env.functions.remove(real_function_name);
+                let rm = env.functions.remove(real_function_name);
                 let res = match rm {
-                    Some(FunctionRepr::Direct(ref mut f)) => {
-                        eval_diff_num(f, arg_exprs, extra_vars, env)
+                    Some(FunctionRepr::Direct(f_ref)) => {
+                        eval_diff_num(f_ref, arg_exprs, extra_vars, env)
                     }
                     Some(FunctionRepr::ByExpression(..)) => {
                         Err("Don't use ___diff_num_ to differentiate a function that has an explicit defining expression.".to_string())
@@ -468,7 +481,7 @@ fn eval_function(
     }
 }
 
-fn eval_diff_num(f: &mut DirectFunction, arg_exprs: &[Expression], extra_vars: &VarStack, env: &mut Env) -> Result<Object, String> {
+fn eval_diff_num(f: &DirectFunction, arg_exprs: &[Expression], extra_vars: &VarStack, env: &mut Env) -> Result<Object, String> {
     // The given arguments should then have the format `point <concat> direction`, so we have to split the arguments
     // into two parts (splitting in the middle of the array which we ensured has even size).
     let point = (0..arg_exprs.len()/2)
@@ -477,7 +490,8 @@ fn eval_diff_num(f: &mut DirectFunction, arg_exprs: &[Expression], extra_vars: &
     let direction = (arg_exprs.len()/2..arg_exprs.len())
         .map(|i| eval(&arg_exprs[i], extra_vars, env))
         .collect::<Result<Vec<_>, _>>()?;
-    math::differentiation::numerical_directional_derivative(f, point, direction)
+    let mut mutable_version = Box::new(|args: &[Object]| f(args));
+    math::differentiation::numerical_directional_derivative(&mut mutable_version, point, direction)
 }
 
 fn eval_assignment(

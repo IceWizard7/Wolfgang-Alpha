@@ -192,16 +192,17 @@ impl ops::Not for &Object {
     }
 }
 
-pub type DirectFunction = Box<dyn Fn(&[Object]) -> Result<Object, String>>;
+pub type DirectFunction = Box<dyn Fn(&[Object]) -> Result<Object, String> + Send + Sync>;
 
 /// Different representations for a function
+#[derive(Clone)]
 pub enum FunctionRepr {
     /// 1. The list of identifiers of the arguments (in order to parse the literal expression correctly).
     ///    These will be prefixed with `___tmp_` to avoid confusion with normal constants. Note that
     ///    the user is not allowed to define a variable whose name starts with three underscores.
     /// 2. E.g. `"5 * ___tmp_x + 2"` where `arguments` is `["___tmp_x"]`. The variable names here will already be prefixed.
     ByExpression(Vec<String>, Expression),
-    Direct(DirectFunction)
+    Direct(&'static DirectFunction)
 }
 
 impl fmt::Debug for FunctionRepr {

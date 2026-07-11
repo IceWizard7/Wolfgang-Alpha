@@ -203,12 +203,20 @@ pub fn analytic_partial_derivative(
         Expression::Integral(inner, a, b, int_var) => {
             // Since we can't always exchange differentiation and integration, we proceed as follows. First,
             // check if the integral is of the special form \int_{a(x)}^{b(x)} h(y) dy where x = wrt and h does not involve x.
-            // Then, the derivative would be h(b(x)) - h(a(x)). Otherwise, define a hidden function ___int_...(x) := \int_{a(x)}^{b(x)} h(x, y) dy
+            // Then, the derivative would be h(b(x)) b'(x) - h(a(x)) a'(x). Otherwise, define a hidden function ___int_...(x) := \int_{a(x)}^{b(x)} h(x, y) dy
             // and return ___diff_num_...
             if !inner.contains_identifier(wrt) {
+                let da = analytic_partial_derivative(a, wrt, extra_vars, env)?;
+                let db = analytic_partial_derivative(b, wrt, extra_vars, env)?;
                 Ok(expr_sub!(
-                    inner.replace_identifiers(int_var, &b.clone()),
-                    inner.replace_identifiers(int_var, &a.clone())
+                    simplify_mul(
+                        inner.replace_identifiers(int_var, &b.clone()),
+                        db
+                    ),
+                    simplify_mul(
+                        inner.replace_identifiers(int_var, &a.clone()),
+                        da
+                    )
                 ))
             } else {
                 let n = (0..).find(|i| !env.functions.contains_key(&format!("___int_{i}"))).unwrap();

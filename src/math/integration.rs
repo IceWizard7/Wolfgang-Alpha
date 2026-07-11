@@ -75,7 +75,7 @@ pub fn integrate(expr: &Expression, a: f64, b: f64, wrt: &String, extra_vars: &V
                 // Having to compute \int_a^b x dx doesn't tell us what the type of x is supposed to be, so we treat it as a real number.
                 Ok(Object::Float((b.powi(2) - a.powi(2)) / 2.0))
             } else {
-                Ok((b-a) * (extra_vars.lookup(ident).unwrap_or(env.constants.get(ident).ok_or(format!("No such variable `{}`.", ident))?)))
+                Ok((b-a) * (extra_vars.lookup(ident).or_else(|| env.constants.get(ident)).ok_or(format!("No such variable `{}`.", ident))?))
             }
         }
         Expression::Number(x) => Ok(Object::Float((b-a) * x)),

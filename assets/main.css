@@ -685,7 +685,7 @@ input:focus-visible {
     font-family: var(--mono);
     font-size: 13px;
     font-weight: 700;
-    line-height: 1.35;
+    line-height: 1.31;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }

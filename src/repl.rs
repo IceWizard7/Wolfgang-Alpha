@@ -6,7 +6,7 @@ use crate::math;
 pub fn eval_line(input: &str, env: &mut math::Env) -> Vec<String> {
     let tokens = match lang::tokenize(input) {
         Ok(x) => x,
-        Err(e) => return vec![format!("[ERROR] {e}")],
+        Err(e) => return vec![e],
     };
     let mut parser = lang::Parser::from(tokens);
     let mut output = Vec::<String>::new();

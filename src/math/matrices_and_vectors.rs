@@ -1216,7 +1216,8 @@ impl Matrix {
             // (the other operation would be undefined anyway), which in turn is mathematically exactly `self^t * dv_y`.
             let z = (&dv_y * self).unwrap();
             let z_q_norm = z.norm(&VectorNorm::P(q));
-            if iter > 1 && (z_q_norm < (&z * &x).unwrap() || (est - eo).abs() <= tolerance * est) {
+            // Below: `est` shouldn't be NaN, but this avoids looping forever if somehow this happens
+            if iter > 1 && (z_q_norm < (&z * &x).unwrap() || (est - eo).abs() <= tolerance * est) || est.is_nan() {
                 break;
             }
             x = z.dual(q)?;

@@ -19,7 +19,7 @@ pub fn eval_line(input: &str, env: &mut math::Env) -> Vec<String> {
                 } else {
                     match lang::eval(&expr, &math::VarStack::Empty, env) {
                         Ok(obj) => {
-                            output = obj.to_multline();
+                            output.append(&mut obj.to_multline());
                         }
                         Err(e) => {
                             output.push(format!("[ERROR] {}", e));

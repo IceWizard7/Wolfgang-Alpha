@@ -216,7 +216,7 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> R
                     _ => {tokens.push(Token::Pipe);}
                 }
             }
-            c if c.is_alphanumeric() || c == '_' => {
+            c if c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_' => {
                 // Encountered first character of a "word" (potential identifier, but maybe of the form "2x").
                 // First, parse all leading digits (which may include a point), then the rest of the word.
                 let mut digits = String::new();
@@ -234,11 +234,9 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> R
                     else {break;}
                 }
                 let mut ident = String::new();
-                while let Some(&nc) = chars.peek() {
-                    if nc.is_alphabetic() || nc == '_' {
-                        ident.push(nc);
-                        chars.next();
-                    } else {break}
+                while let Some(&nc) = chars.peek() && (nc.is_ascii_alphabetic() || nc == '_') {
+                    ident.push(nc);
+                    chars.next();
                 };
                 // Currently, accepted syntaxes are "numberIDENTIFIER" and "IDENTIFIER" only.
                 if !digits.is_empty() {
@@ -252,9 +250,7 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> R
                     tokens.push(identifier_to_token(ident));
                 }
             }
-            other => {
-                return Err(format!("Unexpected character in input: {:?}.", other));
-            }
+            other => return Err(format!("Unexpected character in input: {:?}.", other))
         }
     }
     tokens.push(Token::EOF);

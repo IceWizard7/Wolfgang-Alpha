@@ -205,8 +205,7 @@ fn tokenize_recursive(chars: &mut Peekable<Chars>, return_early: Vec<char>) -> R
                 chars.next();
                 match chars.peek() {
                     Some('&') => {chars.next(); tokens.push(Token::DoubleAmpersand);}
-                    Some(_) => {tokens.push(Token::Ampersand);}
-                    _ => {}
+                    _ => {tokens.push(Token::Ampersand);}
                 }
             }
             '|' => {

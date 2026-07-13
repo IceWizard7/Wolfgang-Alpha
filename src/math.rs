@@ -30,6 +30,20 @@ pub struct Env {
     pub functions: HashMap<String, FunctionRepr>
 }
 
+impl Env {
+    /// For every non-`DirectFunction`-entry in `other`, updates `self` to correspond to that entry.
+    pub fn update(&mut self, other: Env) {
+        for (s, c) in other.constants {
+            self.constants.insert(s, c);
+        }
+        for (s, f) in other.functions {
+            if let FunctionRepr::ByExpression(..) = &f {
+                self.functions.insert(s, f);
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum VarStack<'a> {
     Empty,

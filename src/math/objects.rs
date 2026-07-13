@@ -297,7 +297,13 @@ pub fn try_operation(lhs: &Object, rhs: &Object, op: &BinaryOperation) -> Result
                         BinaryOperation::Comp(c, _) => {
                             let n = x.len();
                             if n == y.len() {
-                                Ok(Object::Float((0..n).all(|i| compare(&x[i], &y[i], c)) as i8 as f64))
+                                Ok(Object::Float(
+                                    if c.check_all() {
+                                        (0..n).all(|i| compare(&x[i], &y[i], c))
+                                    } else {
+                                        (0..n).any(|i| compare(&x[i], &y[i], c))
+                                    } as i8 as f64
+                                ))
                             }
                             else {
                                 err()
@@ -339,11 +345,21 @@ pub fn try_operation(lhs: &Object, rhs: &Object, op: &BinaryOperation) -> Result
                     if let BinaryOperation::Comp(c, _) = op {
                         let m = x.m; let n = x.n;
                         if m == y.m && n == y.n {
-                            Ok(Object::Float((0..m).all(
-                                |i| (0..n).all(
-                                    |j| compare(&x.get(i, j), &y.get(i, j), c)
-                                )
-                            ) as i8 as f64))
+                            Ok(Object::Float(
+                                if c.check_all() {
+                                    (0..m).all(
+                                        |i| (0..n).all(
+                                            |j| compare(&x.get(i, j), &y.get(i, j), c)
+                                        )
+                                    )
+                                } else {
+                                    (0..m).any(
+                                        |i| (0..n).any(
+                                            |j| compare(&x.get(i, j), &y.get(i, j), c)
+                                        )
+                                    )
+                                } as i8 as f64
+                            ))
                         }
                         else {
                             err()

@@ -27,6 +27,13 @@ impl Comparison {
             Comparison::Le => "<=",
         }
     }
+    /// Assume you want to evaluate `v comp w` where `u, v` are vectors/matrices of the same size.
+    /// If `comp == Eq`, then this is equivalent to `all(v[i] comp w[i])`, but if `comp == Neq`,
+    /// then it should be `any(v[i] comp w[i])` instead. This function returns `true` iff `all`
+    /// should be used.
+    pub fn check_all(&self) -> bool {
+        !matches!(self, Comparison::Neq)
+    }
 }
 impl fmt::Display for Comparison {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

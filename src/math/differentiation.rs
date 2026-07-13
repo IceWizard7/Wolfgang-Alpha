@@ -459,7 +459,7 @@ pub fn analytic_directional_derivative(
             let mut res = Object::Float(0.0); // TODO same
             'outer: while i <= lang::eval(to, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: &varstack }, env)?.expect_float()? {
                 for cond in conditions {
-                    match lang::eval(cond, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: extra_vars }, env)? {
+                    match lang::eval(cond, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: &varstack }, env)? {
                         Object::Float(1.0) => {}
                         Object::Float(0.0) => { i += 1.0; continue 'outer; }
                         other => return Err(format!("Expected 1 or 0 when evaluating condition, got {:?}.", other))

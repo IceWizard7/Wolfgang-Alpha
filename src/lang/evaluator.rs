@@ -188,8 +188,7 @@ pub fn eval(
             for x in entries.iter() {
                 let mut tmp_env = captured_env.clone();
                 results.push(eval(x, extra_vars, &mut tmp_env).map_err(|e| format!("Couldn't evaluate entry {}. Traceback: {}", x, e))?);
-                // TODO: merge tmp_env into env
-
+                env.update(tmp_env);
             }
             Ok(Object::Tuple(results))
         },
@@ -257,7 +256,7 @@ pub fn eval(
                         Object::Matrix(x) => Ok(Object::Float(
                             x.norm(&math::matrices_and_vectors::MatrixNorm::from_expr(opt, extra_vars, env)?)?
                         )),
-                        Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Abs, Box::new(e)))),
+                        Object::LiteralExpression(e) => Ok(Object::LiteralExpression(Expression::UnaryOperation(UnaryOperation::Norm(opt.clone()), Box::new(e)))),
                         other => Err(format!("Operation 'Norm' not valid for operand {other}.")),
                     }
                 }
@@ -350,7 +349,8 @@ pub fn eval(
             }
             let mut res = op.if_empty(); // TODO also change type here
             let binop = op.underlying_binop();
-            'outer: while i <= eval(to, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: extra_vars }, env)?.expect_float()? {
+            // The below condition `i + 1.0 != i` is required because for too large floats, adding 1.0 becomes a non-op and prevents the loop from ever finishing.
+            'outer: while i + 1.0 != i && i <= eval(to, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: extra_vars }, env)?.expect_float()? {
                 // Check if all conditions are met. If not, skip this `i`.
                 for cond in conditions {
                     match eval(cond, &VarStack::Frame { vars: &HashMap::from([(varname, &Object::Float(i))]), parent: extra_vars }, env)? {

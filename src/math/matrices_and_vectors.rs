@@ -686,22 +686,25 @@ impl Matrix {
     /// 
     /// `permutation` should be a permutation of the vector `[0, ..., n-1]` for some `n`.
     /// Effectively, the row `i` of the new matrix will be the row `permutation[i]` of `self`.
-    pub fn permute_rows(&self, permutation: &[usize]) -> Matrix {
+    /// 
+    /// Returns `None` if the permutation's size doesn't match the matrices size.
+    pub fn permute_rows(&self, permutation: &[usize]) -> Option<Matrix> {
+        if permutation.len() != self.m || permutation.iter().any(|p| *p + 1 > self.m) {return None;}
         let mut values = Vec::<f64>::with_capacity(self.values.len());
         for p in permutation {
             values.extend(&self.values[p * self.n .. (p + 1) * self.n]);
         }
-        Matrix { m: self.m, n: self.n, values }
+        Some(Matrix { m: self.m, n: self.n, values })
     }
     /// Applies the given permutation to columns of `self`.
     /// 
     /// `permutation` should be a permutation of the vector `[0, ..., n-1]` for some `n`.
     /// Effectively, the column `i` of the new matrix will be the column `permutation[i]` of `self`.
-    pub fn permute_columns(&self, permutation: &[usize]) -> Matrix {
+    pub fn permute_columns(&self, permutation: &[usize]) -> Option<Matrix> {
         // To avoid cache thrashing (inevitable in a naive implementation), we first transpose `self`,
         // apply the inversed permutation as row permutation to it, and finally transpose back.
         // Mathematically, this works because A*P = (P^t * A^t)^t.
-        self.transpose().permute_rows(&utils::transpose_permutation(permutation)).transpose()
+        Some(self.transpose().permute_rows(&utils::transpose_permutation(permutation))?.transpose())
     }
 
     /// Computes the LU decomposition of `self`.
@@ -876,7 +879,7 @@ impl Matrix {
     /// Returns the inverse of `self` in O(n^3).
     pub fn inv(&self) -> Option<Matrix> {
         if let Some((p, l, u)) = self.plu_decomposition() {
-            Some((&u.inv_for_upper_triangular()? * &l.inv_for_lower_triangular()?)?.permute_columns(&utils::transpose_permutation(&p)))
+            (&u.inv_for_upper_triangular()? * &l.inv_for_lower_triangular()?)?.permute_columns(&utils::transpose_permutation(&p))
         } else {None}
     }
 
@@ -939,10 +942,10 @@ impl Matrix {
         &(
             det_p
             * det_q
-            * &(&u.adj_for_upper_triangular_matrix().permute_rows(&utils::transpose_permutation(&qt))
+            * &(&u.adj_for_upper_triangular_matrix().permute_rows(&utils::transpose_permutation(&qt))?
             * &adj_d)?
         ) * &l.transpose().adj_for_upper_triangular_matrix()
-            .permute_rows(&utils::transpose_permutation(&pt))
+            .permute_rows(&utils::transpose_permutation(&pt))?
             .transpose()
     }
 
@@ -1131,10 +1134,11 @@ impl Matrix {
         }
         (q.transpose(), r)
     }
-    /// Computes the QR decomposition of `self` in O(n^3) using Hessenberg matrices and Givens rotations.
+    /// Computes the eigenvalues and QR decomposition of `self` in O(n^3) using Hessenberg matrices and Givens rotations.
     /// 
     /// Returns `None` if `self` is not quadratic. Otherwise, returns `(eigenvalues, q, r)`.
     pub fn qr_decomposition(&self) -> Option<(Vec<f64>, Matrix, Matrix)> {
+        // TODO Check if this returns garbage if some eigenvalues are complex.
         if self.m != self.n {
             return None;
         }
